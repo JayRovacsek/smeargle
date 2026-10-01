@@ -1,0 +1,28 @@
+# Nix
+result
+result-man
+
+# Terraform
+.terraform.lock.hcl
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+terraform.tfvars
+
+# Agent scratch directories (see rules in home-manager-modules/opencode/default.nix)
+.tmp/
+tmp/
+
+# Tooling
+.direnv
+.pre-commit-config.yaml
+
+# OpenCode session exports (must not enter git history)
+sesh.txt
+session-*.md
+
+# smeargle run state (checkpoints/evidence)
+/.smeargle/
+
+# Sample/example catalogs (must not enter git history)
+pci-dss-4.json
