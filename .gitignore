@@ -2,6 +2,10 @@
 result
 result-man
 
+# Python
+__pycache__/
+*.py[cod]
+
 # Terraform
 .terraform.lock.hcl
 .terraform/

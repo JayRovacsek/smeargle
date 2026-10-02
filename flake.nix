@@ -29,7 +29,8 @@
             pyproject = true;
             src = pkgs.lib.cleanSourceWith {
               src = ./.;
-              filter = path: type:
+              filter =
+                path: type:
                 let
                   root = toString ./.;
                   rel = pkgs.lib.removePrefix (root + "/") (toString path);
