@@ -55,3 +55,24 @@ def test_detect_media_type_by_magic_bytes(tmp_path):
     path = tmp_path / "noext"
     path.write_bytes(b"%PDF-1.7\n")
     assert registry.detect_media_type(path) == "application/pdf"
+
+
+def test_invalid_pdf_bytes_raise_input_error(tmp_path):
+    path = tmp_path / "broken.pdf"
+    path.write_bytes(b"this is not a pdf")
+    with pytest.raises(InputError):
+        registry.load_document(path)
+
+
+def test_invalid_docx_zip_raises_input_error(tmp_path):
+    path = tmp_path / "broken.docx"
+    path.write_bytes(b"this is not a zip archive")
+    with pytest.raises(InputError):
+        registry.load_document(path)
+
+
+def test_directory_path_raises_input_error(tmp_path):
+    path = tmp_path / "folder"
+    path.mkdir()
+    with pytest.raises(InputError):
+        registry.load_document(path)

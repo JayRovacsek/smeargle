@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from smeargle.errors import InputError
+from smeargle.errors import InputError, SmeargleError
 from smeargle.loaders import docx, json_text, pdf, text
 
 Loader = Callable[[Path], tuple[str, str]]
@@ -62,4 +62,11 @@ def loader_for(path: Path) -> Loader:
 
 def load_document(path: Path) -> tuple[str, str]:
     path = Path(path)
-    return loader_for(path)(path)
+    try:
+        return loader_for(path)(path)
+    except SmeargleError:
+        raise
+    except OSError as exc:
+        raise InputError(f"could not read input '{path}': {exc}") from exc
+    except Exception as exc:
+        raise InputError(f"could not load input '{path}': {exc}") from exc
