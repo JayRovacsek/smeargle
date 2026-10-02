@@ -1,11 +1,14 @@
+import json
+import zlib
 from datetime import datetime, timezone
 
 import pytest
 
 from smeargle.domain.clock import FrozenClock
-from smeargle.domain.controls import Control
+from smeargle.domain.controls import Control, DomainIndex
 from smeargle.domain.documents import Document
 from smeargle.domain.ids import UuidIdFactory
+from smeargle.domain.mapping import CandidatePair, MappingRecord, Relationship
 from smeargle.domain.requirements import Keyword, Requirement
 from smeargle.store import run_store as rs
 from smeargle.store.run_store import CatalogRow
@@ -162,3 +165,120 @@ def test_retrieve_status_terminal_markers(store):
     assert {r.req_id for r in store.requirements_for_retrieval("run-1")} == set()
     assert store.get_requirement("run-1", "req-a")["retrieve_status"] == "nominated"
     assert store.get_requirement("run-1", "req-b")["retrieve_status"] == "none"
+
+
+def test_candidates_persisted_pre_gate_and_work_queries(store):
+    store.create_run("run-1", "fp", "cfg")
+    store.add_candidate_pair(
+        CandidatePair("run-1", "pair-a", "req-a", "cat-1", "ac-1", "pending", None)
+    )
+    store.add_candidate_pair(
+        CandidatePair("run-1", "pair-b", "req-a", "cat-1", "ac-2", "passed", 0.9)
+    )
+    pending = {p.pair_id for p in store.candidate_pairs_for_verify("run-1")}
+    assert pending == {"pair-a"}
+    classify = {p.pair_id for p in store.candidate_pairs_for_classify("run-1")}
+    assert classify == {"pair-b"}
+    store.set_pair_verify("run-1", "pair-a", verify_status="rejected", noul_prob=0.1)
+    assert {p.pair_id for p in store.candidate_pairs_for_verify("run-1")} == set()
+
+
+def test_set_pair_classify_terminal(store):
+    store.create_run("run-1", "fp", "cfg")
+    store.add_candidate_pair(
+        CandidatePair("run-1", "pair-b", "req-a", "cat-1", "ac-2", "passed", 0.9)
+    )
+    store.set_pair_classify(
+        "run-1",
+        "pair-b",
+        classify_status="done",
+        relation="subset-of",
+        confidence_percentage=0.8,
+        confidence_category="high",
+    )
+    pair = store.get_candidate_pair("run-1", "pair-b")
+    assert pair["classify_status"] == "done"
+    assert pair["relation"] == "subset-of"
+
+
+def test_classify_status_terminal_unmapped_and_skipped(store):
+    store.create_run("run-1", "fp", "cfg")
+    store.add_candidate_pair(
+        CandidatePair("run-1", "pair-u", "req-a", "cat-1", "ac-1", "passed", 0.9)
+    )
+    store.add_candidate_pair(
+        CandidatePair("run-1", "pair-s", "req-a", "cat-1", "ac-2", "passed", 0.9)
+    )
+    store.set_pair_classify("run-1", "pair-u", classify_status="unmapped")
+    store.set_pair_classify("run-1", "pair-s", classify_status="skipped")
+    assert store.get_candidate_pair("run-1", "pair-u")["classify_status"] == "unmapped"
+    assert store.get_candidate_pair("run-1", "pair-s")["classify_status"] == "skipped"
+    assert {p.pair_id for p in store.candidate_pairs_for_classify("run-1")} == set()
+
+
+def test_add_mapping(store):
+    store.create_run("run-1", "fp", "cfg")
+    store.add_mapping(
+        MappingRecord("run-1", "req-a", "cat-1", "ac-2", Relationship.SUBSET_OF, 0.8, "high"),
+        rationale="because",
+    )
+    rows = store.list_mappings("run-1")
+    assert rows[0]["relation"] == "subset-of"
+    assert rows[0]["rationale"] == "because"
+
+
+def test_evidence_is_compressed_redacted_and_at_least_once(store):
+    store.create_run("run-1", "fp", "cfg")
+    store.record_evidence(
+        run_id="run-1",
+        stage="extract",
+        item_ref="doc:d1",
+        call_type="llm",
+        request={"api_key": "secret", "prompt": "hi"},
+    )
+    rows = store.list_evidence("run-1")
+    assert len(rows) == 1
+    request = json.loads(zlib.decompress(rows[0]["request_json"]))
+    assert request == {"api_key": "[REDACTED]", "prompt": "hi"}
+
+    store.record_evidence(
+        run_id="run-1",
+        stage="extract",
+        item_ref="doc:d1",
+        call_type="llm",
+        request={"api_key": "secret", "prompt": "hi"},
+        response={"answer": "ok", "authorization": "Bearer x"},
+        http_status=200,
+        attempt_no=1,
+    )
+    rows = store.list_evidence("run-1")
+    assert len(rows) == 1
+    response = json.loads(zlib.decompress(rows[0]["response_json"]))
+    assert response == {"answer": "ok", "authorization": "[REDACTED]"}
+    assert rows[0]["http_status"] == 200
+
+
+def test_record_attempt(store):
+    store.create_run("run-1", "fp", "cfg")
+    store.record_attempt(
+        run_id="run-1",
+        stage="verify",
+        item_ref="pair-a",
+        call_type="jev",
+        attempt_no=1,
+        http_status=503,
+        error_class="ServiceUnavailable",
+        error="retry",
+        duration_ms=12,
+    )
+    assert store.counts("run-1")["attempts"] == 1
+
+
+def test_domain_index_round_trip(store):
+    store.create_run("run-1", "fp", "cfg")
+    index = DomainIndex("idx-1", "content", "model", "prompt", {"access": ["ac-1"]})
+    store.add_domain_index(index)
+    loaded = store.get_domain_index("content", "model", "prompt")
+    assert loaded["index_id"] == "idx-1"
+    assert json.loads(loaded["index_json"]) == {"access": ["ac-1"]}
+    assert store.get_domain_index("other", "model", "prompt") is None
