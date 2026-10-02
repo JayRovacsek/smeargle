@@ -50,6 +50,11 @@ def root(
         typer.echo(f"smeargle {__version__}")
         raise typer.Exit(code=EXIT_SUCCESS)
 
+    if log_format is not None and log_format not in {"text", "json"}:
+        raise UsageError("--log-format must be 'text' or 'json'")
+    if config is not None and not config.exists():
+        raise UsageError(f"config file not found: {config}")
+
     overrides: dict[str, object] = {}
     if output is not None:
         overrides["output"] = output
@@ -69,7 +74,12 @@ def root(
     if execution:
         overrides["execution"] = execution
 
-    settings = Settings.load(config_file=config, overrides=overrides)
+    try:
+        settings = Settings.load(config_file=config, overrides=overrides)
+    except SmeargleError:
+        raise
+    except Exception as exc:
+        raise UsageError(f"invalid configuration: {exc}") from exc
     configure_logging(settings.execution.log_format, verbose=settings.execution.verbose)
     ctx.obj = settings
 

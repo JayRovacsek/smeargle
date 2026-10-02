@@ -25,3 +25,35 @@ def test_subcommand_reports_not_implemented(capsys):
 def test_unknown_option_is_usage_error():
     code = main(["--nope"])
     assert code == 2
+
+
+def test_invalid_log_format_is_usage_error(capsys):
+    code = main(["--log-format", "xml", "run"])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "log-format" in err
+
+
+def test_missing_config_file_is_usage_error(tmp_path, capsys):
+    code = main(["--config", str(tmp_path / "nope.toml"), "run"])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "not found" in err
+
+
+def test_unsupported_config_extension_is_usage_error(tmp_path, capsys):
+    path = tmp_path / "bad.json"
+    path.write_text("{}")
+    code = main(["--config", str(path), "run"])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "invalid configuration" in err
+
+
+def test_invalid_config_value_is_usage_error(tmp_path, capsys):
+    path = tmp_path / "bad.toml"
+    path.write_text("[mapping]\nextract_gate_threshold = 5.0\n")
+    code = main(["--config", str(path), "run"])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "invalid configuration" in err
