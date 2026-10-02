@@ -15,16 +15,39 @@ def test_help_lists_subcommands(capsys):
         assert command in out
 
 
-def test_subcommand_reports_not_implemented(capsys):
-    code = main(["run"])
+def test_extract_reports_not_implemented(capsys):
+    code = main(["extract"])
     err = capsys.readouterr().err
     assert code == 2
-    assert "not implemented in Phase 1" in err
+    assert "not implemented in Phase 2" in err
 
 
 def test_unknown_option_is_usage_error():
     code = main(["--nope"])
     assert code == 2
+
+
+def test_run_requires_an_input(tmp_path, capsys):
+    code = main(
+        ["--state-dir", str(tmp_path / "state"), "--output", str(tmp_path / "out"), "run"]
+    )
+    assert code == 2
+    assert "requires at least one --input" in capsys.readouterr().err
+
+
+def test_status_without_state_reports_nothing(tmp_path, capsys):
+    code = main(["--state-dir", str(tmp_path / "missing"), "status"])
+    assert code == 0
+    assert "no runs recorded" in capsys.readouterr().out
+
+
+def test_validate_rejects_invalid_catalog(tmp_path):
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"catalog": {"metadata": {"title": "T"}}}', encoding="utf-8")
+    code = main(
+        ["--state-dir", str(tmp_path / "state"), "validate", "-c", str(bad)]
+    )
+    assert code == 4
 
 
 def test_invalid_log_format_is_usage_error(capsys):

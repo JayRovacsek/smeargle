@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 
 from smeargle import __version__
+from smeargle.catalog_adapters.registry import parse_catalog
 from smeargle.config import Settings
+from smeargle.domain.clock import SystemClock
+from smeargle.domain.ids import UuidIdFactory
 from smeargle.errors import (
     EXIT_ABORTED,
     EXIT_SUCCESS,
@@ -18,6 +21,10 @@ from smeargle.errors import (
     exit_code_for,
 )
 from smeargle.observability import configure_logging
+from smeargle.oscal_build import facade
+from smeargle.pipeline import run as run_pipeline
+from smeargle.store.db import DB_FILENAME
+from smeargle.store.run_store import RunStore
 
 app = typer.Typer(
     name="smeargle",
@@ -33,6 +40,10 @@ def _resolve_settings(ctx: typer.Context) -> Settings:
     return ctx.obj
 
 
+def _configure_oscal(settings: Settings) -> None:
+    facade.configure_support_file(settings.state_dir / "oscal_support.db")
+
+
 @app.callback(invoke_without_command=True)
 def root(
     ctx: typer.Context,
@@ -45,15 +56,23 @@ def root(
     verbose: bool = typer.Option(False, "--verbose", help="Verbose logging."),
     yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompts."),
     version: bool = typer.Option(False, "--version", help="Show version and exit."),
+    catalog_format: Optional[str] = typer.Option(
+        None, "--catalog-format", help="auto or oscal."
+    ),
 ) -> None:
     if version:
         typer.echo(f"smeargle {__version__}")
         raise typer.Exit(code=EXIT_SUCCESS)
 
+    # --- Phase 1 remediation (MUST be preserved) ---
     if log_format is not None and log_format not in {"text", "json"}:
         raise UsageError("--log-format must be 'text' or 'json'")
     if config is not None and not config.exists():
         raise UsageError(f"config file not found: {config}")
+    # --- end Phase 1 remediation ---
+
+    if catalog_format is not None and catalog_format not in {"auto", "oscal"}:
+        raise UsageError("--catalog-format must be 'auto' or 'oscal'")
 
     overrides: dict[str, object] = {}
     if output is not None:
@@ -71,15 +90,19 @@ def root(
         execution["verbose"] = True
     if yes:
         execution["yes"] = True
+    if catalog_format is not None:
+        execution["catalog_format"] = catalog_format
     if execution:
         overrides["execution"] = execution
 
+    # --- Phase 1 remediation (MUST be preserved) ---
     try:
         settings = Settings.load(config_file=config, overrides=overrides)
     except SmeargleError:
         raise
     except Exception as exc:
         raise UsageError(f"invalid configuration: {exc}") from exc
+    # --- end Phase 1 remediation ---
     configure_logging(settings.execution.log_format, verbose=settings.execution.verbose)
     ctx.obj = settings
 
@@ -89,14 +112,46 @@ def root(
 
 
 def _not_implemented(name: str) -> None:
-    raise UsageError(f"'{name}' is not implemented in Phase 1")
+    raise UsageError(f"'{name}' is not implemented in Phase 2")
 
 
 @app.command()
-def run(ctx: typer.Context) -> None:
-    """Run the full pipeline."""
-    _resolve_settings(ctx)
-    _not_implemented("run")
+def run(
+    ctx: typer.Context,
+    input: Optional[List[Path]] = typer.Option(None, "-i", "--input", help="Input document."),
+    catalog: Optional[List[Path]] = typer.Option(None, "-c", "--catalog", help="Catalog."),
+) -> None:
+    """Load inputs, ingest catalogs, and stop before the LLM stages."""
+    settings = _resolve_settings(ctx)
+    input_paths = [Path(p) for p in input] if input else [Path(p) for p in settings.inputs]
+    catalog_paths = (
+        [Path(p) for p in catalog] if catalog else [Path(p) for p in settings.catalogs]
+    )
+    if not input_paths:
+        raise UsageError("run requires at least one --input")
+    if not catalog_paths:
+        raise UsageError("run requires at least one --catalog")
+    if settings.output is None:
+        raise UsageError("run requires --output")
+
+    _configure_oscal(settings)
+    result = run_pipeline.run_ingestion(
+        state_dir=settings.state_dir,
+        output=settings.output,
+        input_paths=input_paths,
+        catalog_paths=catalog_paths,
+        settings=settings,
+        clock=SystemClock(),
+        id_factory=UuidIdFactory(),
+        run_id=settings.execution.run_id,
+    )
+    typer.echo(
+        f"run {result.run_id}: {result.document_count} document(s),"
+        f" {result.catalog_count} catalog(s), {result.control_count} control(s)"
+    )
+    typer.echo(
+        "phase 2: ingestion complete; extraction/index LLM stages are not implemented yet"
+    )
 
 
 @app.command()
@@ -121,20 +176,49 @@ def resume(ctx: typer.Context) -> None:
 
 
 @app.command()
-def validate(ctx: typer.Context) -> None:
+def validate(
+    ctx: typer.Context,
+    catalog: Optional[List[Path]] = typer.Option(None, "-c", "--catalog", help="Catalog."),
+) -> None:
     """Validate input catalogs and/or emitted artifacts."""
-    _resolve_settings(ctx)
-    _not_implemented("validate")
+    settings = _resolve_settings(ctx)
+    _configure_oscal(settings)
+    targets = (
+        [Path(p) for p in catalog] if catalog else [Path(p) for p in settings.catalogs]
+    )
+    if not targets and settings.output is None:
+        typer.echo("nothing to validate")
+        return
+    for path in targets:
+        parse_catalog(path, settings.execution.catalog_format)
+        typer.echo(f"{path}: valid")
+    if settings.output is not None:
+        catalogs_dir = settings.output / "catalogs"
+        if catalogs_dir.is_dir():
+            for path in sorted(catalogs_dir.glob("*.json")):
+                facade.validate("catalog", facade.load_document(path))
+                typer.echo(f"{path}: valid")
 
 
 @app.command()
 def status(ctx: typer.Context) -> None:
     """Show per-stage progress and counts."""
-    _resolve_settings(ctx)
-    _not_implemented("status")
+    settings = _resolve_settings(ctx)
+    if not (settings.state_dir / DB_FILENAME).exists():
+        typer.echo("no runs recorded")
+        return
+    with RunStore.open(settings.state_dir) as store:
+        runs = store.list_runs()
+        if not runs:
+            typer.echo("no runs recorded")
+            return
+        for row in runs:
+            counts = store.counts(row["run_id"])
+            summary = " ".join(f"{name}={value}" for name, value in counts.items())
+            typer.echo(f"{row['run_id']} {row['status']} {summary}")
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     try:
         result = app(args=argv, standalone_mode=False)
         return result if isinstance(result, int) else EXIT_SUCCESS
