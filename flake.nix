@@ -61,6 +61,7 @@
             nativeCheckInputs = [
               py.pytestCheckHook
               py.jsonschema-rs
+              py.respx
             ];
             pythonImportsCheck = [ "smeargle" ];
             meta = {
@@ -88,6 +89,7 @@
                 ps.python-docx
                 ps.jsonschema-rs
                 ps.pytest
+                ps.respx
               ]))
               py.ruff
               py.mypy
