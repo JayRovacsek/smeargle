@@ -13,7 +13,10 @@
       nixpkgs,
       ...
     }:
-    flake-utils.lib.eachSystem
+    let
+      overlay = import ./overlays/default.nix;
+    in
+    (flake-utils.lib.eachSystem
       [
         "x86_64-linux"
         "aarch64-linux"
@@ -21,7 +24,10 @@
       (
         system:
         let
-          pkgs = import self.inputs.nixpkgs { inherit system; };
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ overlay ];
+          };
           py = pkgs.python3Packages;
           smeargle = py.buildPythonApplication {
             pname = "smeargle";
@@ -48,8 +54,14 @@
               pydantic-settings
               httpx
               pyyaml
+              oscal
+              pypdf
+              python-docx
             ];
-            nativeCheckInputs = [ py.pytestCheckHook ];
+            nativeCheckInputs = [
+              py.pytestCheckHook
+              py.jsonschema-rs
+            ];
             pythonImportsCheck = [ "smeargle" ];
             meta = {
               description = "Map RFC 2119 requirements to OSCAL control catalogs";
@@ -71,6 +83,10 @@
                 ps.pydantic-settings
                 ps.httpx
                 ps.pyyaml
+                ps.oscal
+                ps.pypdf
+                ps.python-docx
+                ps.jsonschema-rs
                 ps.pytest
               ]))
               py.ruff
@@ -88,5 +104,9 @@
             program = "${self.packages.${system}.smeargle}/bin/smeargle";
           };
         }
-      );
+      )
+    )
+    // {
+      overlays.default = overlay;
+    };
 }

@@ -2,6 +2,9 @@
 result
 result-man
 
+# oscal support database written to CWD by unconfigured callers
+/support/
+
 # Python
 __pycache__/
 *.py[cod]
