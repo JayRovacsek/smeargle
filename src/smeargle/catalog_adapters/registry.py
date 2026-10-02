@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from smeargle.catalog_adapters.types import ParsedCatalog
-from smeargle.errors import CatalogError
+from smeargle.errors import CatalogError, SmeargleError
 
 VENDOR_KIND = "vendor-security-controls"
 OSCAL_KIND = "oscal"
@@ -15,7 +15,7 @@ OSCAL_KIND = "oscal"
 def _load_json(path: Path) -> dict:
     try:
         return json.loads(Path(path).read_text(encoding="utf-8-sig"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise CatalogError(f"'{path}' is not valid JSON: {exc}") from exc
 
 
@@ -35,17 +35,24 @@ def parse_catalog(path: Path, catalog_format: str = "auto") -> tuple[str, Parsed
     from smeargle.oscal_build import facade
 
     path = Path(path)
-    suffix = path.suffix.lower()
-    if catalog_format == "oscal":
-        return OSCAL_KIND, oscal_adapter.parse_standard(facade.load_document(path))
-    if catalog_format != "auto":
-        raise CatalogError(f"unsupported catalog format '{catalog_format}'")
+    try:
+        suffix = path.suffix.lower()
+        if catalog_format == "oscal":
+            return OSCAL_KIND, oscal_adapter.parse_standard(facade.load_document(path))
+        if catalog_format != "auto":
+            raise CatalogError(f"unsupported catalog format '{catalog_format}'")
 
-    if suffix in {".xml", ".yaml", ".yml"}:
-        return OSCAL_KIND, oscal_adapter.parse_standard(facade.load_document(path))
+        if suffix in {".xml", ".yaml", ".yml"}:
+            return OSCAL_KIND, oscal_adapter.parse_standard(facade.load_document(path))
 
-    document = _load_json(path)
-    kind = detect_kind(path, document)
-    if kind == VENDOR_KIND:
-        return kind, vendor_adapter.parse_vendor(document)
-    return OSCAL_KIND, oscal_adapter.parse_standard(facade.load_document(path))
+        document = _load_json(path)
+        kind = detect_kind(path, document)
+        if kind == VENDOR_KIND:
+            return kind, vendor_adapter.parse_vendor(document)
+        return OSCAL_KIND, oscal_adapter.parse_standard(facade.load_document(path))
+    except SmeargleError:
+        raise
+    except ValueError as exc:
+        raise CatalogError(f"could not parse catalog '{path}': {exc}") from exc
+    except Exception as exc:
+        raise CatalogError(f"could not load catalog '{path}': {exc}") from exc

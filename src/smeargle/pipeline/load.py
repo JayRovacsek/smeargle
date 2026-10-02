@@ -7,6 +7,7 @@ from typing import Iterable
 
 from smeargle.domain.documents import Document
 from smeargle.domain.ids import doc_id_for
+from smeargle.errors import InputError
 from smeargle.loaders import registry
 from smeargle.store.run_store import RunStore
 
@@ -16,7 +17,10 @@ def run_load(store: RunStore, run_id: str, input_paths: Iterable[Path]) -> list[
     loaded: list[Document] = []
     seen: set[str] = set()
     for path in (Path(p) for p in input_paths):
-        raw = path.read_bytes()
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            raise InputError(f"could not read input '{path}': {exc}") from exc
         content_sha256 = doc_id_for(raw)
         if content_sha256 in seen:
             continue

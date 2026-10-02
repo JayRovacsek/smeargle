@@ -47,7 +47,10 @@ def ingest_catalogs(
 
     parsed_catalogs = []
     for path in paths:
-        raw = path.read_bytes()
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            raise CatalogError(f"could not read catalog '{path}': {exc}") from exc
         catalog_id = catalog_id_for(raw)
         _kind, parsed = parse_catalog(path, catalog_format)
         parsed_catalogs.append((path, catalog_id, parsed))

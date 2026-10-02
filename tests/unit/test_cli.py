@@ -80,3 +80,46 @@ def test_invalid_config_value_is_usage_error(tmp_path, capsys):
     err = capsys.readouterr().err
     assert code == 2
     assert "invalid configuration" in err
+
+
+def test_run_missing_input_returns_input_exit_code(tmp_path):
+    catalog = tmp_path / "vendor.json"
+    catalog.write_text(
+        '{"catalog": {"name": "V", "securityControls": []}}', encoding="utf-8"
+    )
+    code = main(
+        [
+            "--state-dir",
+            str(tmp_path / "state"),
+            "--output",
+            str(tmp_path / "out"),
+            "run",
+            "-c",
+            str(catalog),
+            "-i",
+            str(tmp_path / "missing.txt"),
+        ]
+    )
+    assert code == 3
+
+
+def test_validate_missing_catalog_returns_catalog_exit_code(tmp_path):
+    code = main(
+        [
+            "--state-dir",
+            str(tmp_path / "state"),
+            "validate",
+            "-c",
+            str(tmp_path / "missing.json"),
+        ]
+    )
+    assert code == 4
+
+
+def test_validate_malformed_catalog_returns_catalog_exit_code(tmp_path):
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text('{"catalog": {}}', encoding="utf-8")
+    code = main(
+        ["--state-dir", str(tmp_path / "state"), "validate", "-c", str(malformed)]
+    )
+    assert code == 4

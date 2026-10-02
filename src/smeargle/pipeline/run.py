@@ -9,6 +9,7 @@ from typing import Any, Iterable, Optional
 from smeargle.config import Settings
 from smeargle.domain.clock import Clock
 from smeargle.domain.ids import IdFactory, config_hash, fingerprint, sha256_hex
+from smeargle.errors import CatalogError, InputError
 from smeargle.observability import redact
 from smeargle.pipeline import index, load
 from smeargle.store.run_store import RunStore
@@ -40,8 +41,18 @@ def config_snapshot(settings: Settings) -> dict[str, Any]:
 
 
 def compute_fingerprint(input_paths: Iterable[Path], catalog_paths: Iterable[Path]) -> str:
-    input_digests = [sha256_hex(Path(p).read_bytes()) for p in input_paths]
-    catalog_digests = [sha256_hex(Path(p).read_bytes()) for p in catalog_paths]
+    input_digests = []
+    for path in input_paths:
+        try:
+            input_digests.append(sha256_hex(Path(path).read_bytes()))
+        except OSError as exc:
+            raise InputError(f"could not read input '{path}': {exc}") from exc
+    catalog_digests = []
+    for path in catalog_paths:
+        try:
+            catalog_digests.append(sha256_hex(Path(path).read_bytes()))
+        except OSError as exc:
+            raise CatalogError(f"could not read catalog '{path}': {exc}") from exc
     return fingerprint(input_digests, catalog_digests)
 
 
