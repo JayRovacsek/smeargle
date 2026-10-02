@@ -45,6 +45,10 @@ class AbortedError(SmeargleError):
     exit_code = EXIT_ABORTED
 
 
+class StoreError(SmeargleError):
+    exit_code = EXIT_UNEXPECTED
+
+
 def exit_code_for(exc: BaseException) -> int:
     if isinstance(exc, SmeargleError):
         return exc.exit_code
