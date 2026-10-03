@@ -4,6 +4,10 @@ from smeargle.errors import StoreError
 from smeargle.store import db, schema
 
 
+class Boom(BaseException):
+    pass
+
+
 def test_connect_sets_pragmas(tmp_path):
     conn = db.connect(tmp_path)
     assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
@@ -61,4 +65,25 @@ def test_transaction_rolls_back_on_error(tmp_path):
             raise ValueError("boom")
     status = conn.execute("SELECT status FROM runs WHERE run_id='r'").fetchone()[0]
     assert status == "started"
+    conn.close()
+
+
+def test_transaction_rolls_back_on_base_exception(tmp_path):
+    conn = db.connect(tmp_path)
+    schema.migrate(conn)
+    conn.execute(
+        "INSERT INTO runs (run_id, fingerprint, config_hash, status, oscal_version, created_at, updated_at)"
+        " VALUES ('r', 'f', 'c', 'started', '1.2.3', 't', 't')"
+    )
+    conn.commit()
+    with pytest.raises(Boom):
+        with db.transaction(conn):
+            conn.execute("UPDATE runs SET status='changed' WHERE run_id='r'")
+            raise Boom()
+    status = conn.execute("SELECT status FROM runs WHERE run_id='r'").fetchone()[0]
+    assert status == "started"
+    with db.transaction(conn):
+        conn.execute("UPDATE runs SET status='again' WHERE run_id='r'")
+    status = conn.execute("SELECT status FROM runs WHERE run_id='r'").fetchone()[0]
+    assert status == "again"
     conn.close()

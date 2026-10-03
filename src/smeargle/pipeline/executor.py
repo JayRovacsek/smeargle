@@ -29,9 +29,16 @@ class Writer:
         self._queue: "queue.Queue[Optional[tuple]]" = queue.Queue()
         self._ready = threading.Event()
         self._error: Optional[BaseException] = None
+        self._lifecycle = threading.Lock()
+        self._started = False
+        self._closed = False
         self._thread = threading.Thread(target=self._run, name="smeargle-writer", daemon=True)
 
     def start(self) -> None:
+        with self._lifecycle:
+            if self._started:
+                raise RuntimeError("writer already started")
+            self._started = True
         self._thread.start()
         self._ready.wait()
         if self._error is not None:
@@ -57,19 +64,45 @@ class Writer:
             self._error = exc
         finally:
             self._ready.set()
+            self._finish()
+
+    def _finish(self) -> None:
+        with self._lifecycle:
+            self._closed = True
+            while True:
+                try:
+                    item = self._queue.get_nowait()
+                except queue.Empty:
+                    break
+                if item is None:
+                    continue
+                _, future = item
+                if future.set_running_or_notify_cancel():
+                    error = self._error if self._error is not None else RuntimeError(
+                        "writer has stopped"
+                    )
+                    future.set_exception(error)
 
     def submit(self, fn: Callable[[RunStore], Any]) -> "Future[Any]":
         future: "Future[Any]" = Future()
-        if self._error is not None:
-            future.set_exception(self._error)
-            return future
-        self._queue.put((fn, future))
+        with self._lifecycle:
+            if self._error is not None:
+                future.set_exception(self._error)
+            elif self._closed:
+                future.set_exception(RuntimeError("writer has stopped"))
+            elif not self._started:
+                future.set_exception(RuntimeError("writer has not been started"))
+            else:
+                self._queue.put((fn, future))
         return future
 
     def call(self, fn: Callable[[RunStore], Any]) -> Any:
         return self.submit(fn).result()
 
     def stop(self) -> None:
+        with self._lifecycle:
+            if not self._started or self._closed:
+                return
         self._queue.put(None)
         self._thread.join()
 

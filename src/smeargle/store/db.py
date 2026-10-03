@@ -32,7 +32,7 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     conn.execute("BEGIN")
     try:
         yield conn
-    except Exception:
+    except BaseException:
         conn.execute("ROLLBACK")
         raise
     conn.execute("COMMIT")
