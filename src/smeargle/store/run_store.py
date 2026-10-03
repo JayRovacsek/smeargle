@@ -335,6 +335,49 @@ class RunStore:
         ).fetchall()
         return [_requirement_from_row(row) for row in rows]
 
+    def add_requirement_if_absent(self, requirement: Requirement) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO requirements (run_id, req_id, doc_id, ordinal, text,"
+            " normalized_text, keyword, extract_status, gate_status, gate_noul_prob,"
+            " gate_choice, retrieve_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                requirement.run_id,
+                requirement.req_id,
+                requirement.doc_id,
+                requirement.ordinal,
+                requirement.text,
+                requirement.normalized_text,
+                requirement.keyword.value if requirement.keyword else None,
+                requirement.extract_status,
+                requirement.gate_status,
+                requirement.gate_noul_prob,
+                requirement.gate_choice,
+                requirement.retrieve_status,
+            ),
+        )
+
+    def list_requirements(self, run_id: str) -> list[Requirement]:
+        rows = self._conn.execute(
+            "SELECT * FROM requirements WHERE run_id = ? ORDER BY ordinal, req_id", (run_id,)
+        ).fetchall()
+        return [_requirement_from_row(row) for row in rows]
+
+    def has_evidence_response(
+        self, run_id: str, stage: str, item_ref: str, call_type: str
+    ) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM evidence WHERE run_id = ? AND stage = ? AND item_ref = ?"
+            " AND call_type = ? AND response_json IS NOT NULL LIMIT 1",
+            (run_id, stage, item_ref, call_type),
+        ).fetchone()
+        return row is not None
+
+    def list_candidate_pairs(self, run_id: str) -> list[CandidatePair]:
+        rows = self._conn.execute(
+            "SELECT * FROM candidate_pairs WHERE run_id = ? ORDER BY pair_id", (run_id,)
+        ).fetchall()
+        return [self._pair_from_row(row) for row in rows]
+
     # -- candidate pairs and mappings --------------------------------------
     def add_candidate_pair(
         self, pair: CandidatePair, *, mapped_threshold: Optional[float] = None
@@ -492,7 +535,10 @@ class RunStore:
         self._conn.execute(
             "INSERT INTO attempts (attempt_id, run_id, stage, item_ref, call_type, attempt_no,"
             " http_status, error_class, error, duration_ms, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT (attempt_id) DO UPDATE SET http_status = excluded.http_status,"
+            " error_class = excluded.error_class, error = excluded.error,"
+            " duration_ms = excluded.duration_ms, created_at = excluded.created_at",
             (
                 attempt_id,
                 run_id,
