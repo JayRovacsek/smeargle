@@ -33,6 +33,10 @@ class ServiceError(SmeargleError):
     exit_code = EXIT_SERVICE
 
 
+class FatalServiceError(ServiceError):
+    """A service failure that affects every call (unreachable endpoint or auth rejected)."""
+
+
 class GapsError(SmeargleError):
     exit_code = EXIT_GAPS
 
