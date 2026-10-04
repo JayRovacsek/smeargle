@@ -75,3 +75,11 @@ def serialise_json(model: str, document: Mapping[str, Any]) -> str:
     if not instance.is_valid:
         raise CatalogError(f"cannot serialise invalid OSCAL {model}: {_summary(instance)}")
     return instance.dumps(format="json", pretty_print=True)
+
+
+def write_document(path: Path, model: str, document: Mapping[str, Any]) -> None:
+    """Validate then write an OSCAL model as pretty JSON (spec 11)."""
+    text = serialise_json(model, document)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
