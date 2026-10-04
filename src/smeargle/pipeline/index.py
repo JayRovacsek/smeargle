@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 from smeargle.catalog_adapters import normalise
 from smeargle.catalog_adapters.registry import parse_catalog
+from smeargle.clients.dto import IndexResponseModel
+from smeargle.clients.ports import CallMeta, LLMClient
 from smeargle.domain.clock import Clock
-from smeargle.domain.controls import Control
-from smeargle.domain.ids import IdFactory, catalog_id_for
+from smeargle.domain.controls import Control, DomainIndex
+from smeargle.domain.ids import IdFactory, catalog_id_for, index_id_for
 from smeargle.errors import CatalogError
 from smeargle.oscal_build import facade
+from smeargle.prompts import indexing as indexing_prompt
 from smeargle.store.run_store import CatalogRow, RunStore
 
 
@@ -112,3 +116,62 @@ def ingest_catalogs(
         store.complete_stage(run_id, "index")
 
     return [catalog_id for _path, catalog_id, _parsed in parsed_catalogs]
+
+
+def control_chunks(controls: list[Control], *, chunk_size: int) -> list[list[Control]]:
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be >= 1")
+    return [controls[i : i + chunk_size] for i in range(0, len(controls), chunk_size)]
+
+
+def render_control_chunk(controls: list[Control]) -> str:
+    listing = "\n".join(
+        f"{control.control_id} | {control.title} | {control.text}" for control in controls
+    )
+    return indexing_prompt.render_indexing(listing)
+
+
+def label_chunk(
+    llm: LLMClient, controls: list[Control], *, meta: Optional[CallMeta] = None
+) -> dict[str, tuple[str, str]]:
+    known = {control.control_id for control in controls}
+    messages = [{"role": "user", "content": render_control_chunk(controls)}]
+    response = llm.complete_json(IndexResponseModel, messages, meta=meta)
+    labels: dict[str, tuple[str, str]] = {}
+    for label in response.labels:
+        if label.control_id in known:
+            labels[label.control_id] = (label.domain, label.family)
+    return labels
+
+
+def domain_index_from_labels(
+    content_sha256: str,
+    model_id: str,
+    prompt_hash: str,
+    labels: dict[str, tuple[str, str]],
+) -> DomainIndex:
+    domains: dict[str, list[str]] = {}
+    for control_id, (domain, _family) in sorted(labels.items()):
+        domains.setdefault(domain, []).append(control_id)
+    return DomainIndex(
+        index_id=index_id_for(content_sha256, model_id, prompt_hash),
+        content_sha256=content_sha256,
+        model_id=model_id,
+        prompt_hash=prompt_hash,
+        domains={domain: sorted(ids) for domain, ids in sorted(domains.items())},
+    )
+
+
+def cached_domain_index(
+    store: RunStore, content_sha256: str, model_id: str, prompt_hash: str
+) -> Optional[DomainIndex]:
+    row = store.get_domain_index(content_sha256, model_id, prompt_hash)
+    if row is None:
+        return None
+    return DomainIndex(
+        index_id=row["index_id"],
+        content_sha256=row["content_sha256"],
+        model_id=row["model_id"],
+        prompt_hash=row["prompt_hash"],
+        domains=json.loads(row["index_json"]),
+    )
