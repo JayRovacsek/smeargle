@@ -57,7 +57,10 @@ def run_load(store: RunStore, run_id: str, input_paths: Iterable[Path]) -> list[
         )
         for ordinal, document in enumerate(loaded)
     ]
-    for document in ordered:
-        store.add_document(document)
-    store.complete_stage(run_id, "load")
+    with store.transaction():
+        for document in ordered:
+            if store.document_content_exists(run_id, document.content_sha256):
+                continue
+            store.add_document(document)
+        store.complete_stage(run_id, "load")
     return ordered

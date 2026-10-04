@@ -5,7 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Callable, Iterable, Optional, Sequence
 
 from smeargle.clients.http import build_client, load_bearer_token
 from smeargle.clients.jev import LayaJevClient
@@ -146,7 +146,12 @@ def _is_fatal(error: BaseException) -> bool:
     return isinstance(error, FatalServiceError)
 
 
-def _fan_out(pool: ThreadPoolExecutor, jobs: list[tuple[Any, Any]]) -> list[tuple[Any, Any, Optional[BaseException]]]:
+def _fan_out(
+    pool: ThreadPoolExecutor,
+    jobs: list[tuple[Any, Any]],
+    *,
+    on_error: Optional[Callable[[Any, BaseException], None]] = None,
+) -> list[tuple[Any, Any, Optional[BaseException]]]:
     futures = {pool.submit(fn): key for key, fn in jobs}
     results: list[tuple[Any, Any, Optional[BaseException]]] = []
     for future in as_completed(futures):
@@ -156,8 +161,42 @@ def _fan_out(pool: ThreadPoolExecutor, jobs: list[tuple[Any, Any]]) -> list[tupl
         except BaseException as error:  # noqa: BLE001 - per-item failures continue
             if _is_fatal(error):
                 raise
+            if on_error is not None:
+                on_error(key, error)
             results.append((key, None, error))
     return results
+
+
+def _attempt_recorder(
+    writer: Writer, run_id: str, metas: dict[Any, CallMeta]
+) -> Callable[[Any, BaseException], None]:
+    def record(key: Any, error: BaseException) -> None:
+        meta = metas.get(key)
+        if meta is None:
+            return
+        writer.call(
+            lambda store: store.record_attempt(
+                run_id=run_id,
+                stage=meta.stage,
+                item_ref=meta.item_ref,
+                call_type=meta.call_type,
+                attempt_no=0,
+                error_class=type(error).__name__,
+                error=str(error),
+                duration_ms=0,
+            )
+        )
+
+    return record
+
+
+def _stamp_failure(writer: Writer, run_id: str, error: BaseException) -> None:
+    message = str(error)
+    try:
+        writer.call(lambda store: store.fail_running_stages(run_id, message))
+        writer.call(lambda store: store.set_run_status(run_id, "failed"))
+    except BaseException:  # noqa: BLE001 - preserve the original failure
+        return
 
 
 def _phase3_config_snapshot(settings: Settings) -> dict[str, Any]:
@@ -211,6 +250,7 @@ def run_extract(
     documents = writer.call(lambda store: work.pending_documents(store, run_id))
     jobs: list[tuple[Any, Any]] = []
     payloads: dict[Any, Any] = {}
+    metas: dict[Any, CallMeta] = {}
     for document in documents:
         _media_type, text = loader_registry.load_document(Path(document["path"]))
         chunks = extract.chunk_text(
@@ -233,10 +273,11 @@ def run_extract(
             )
             jobs.append((key, lambda chunk=chunk, meta=meta: extract.propose_chunk(llm, chunk, meta=meta)))
             payloads[key] = (document, position, chunk, stage)
+            metas[key] = meta
 
     proposals: list[tuple[Any, str, Requirement]] = []
     completed: list[Any] = []
-    for key, outcome, error in _fan_out(pool, jobs):
+    for key, outcome, error in _fan_out(pool, jobs, on_error=_attempt_recorder(writer, run_id, metas)):
         if error is not None:
             continue
         completed.append(key)
@@ -255,7 +296,15 @@ def run_extract(
     unique: dict[str, Requirement] = {}
     for _key, req_id, requirement in sorted(proposals, key=lambda item: item[0]):
         unique.setdefault(req_id, requirement)
-    ordered = [replace(requirement, ordinal=index) for index, requirement in enumerate(unique.values())]
+    existing = writer.call(lambda store: store.list_requirements(run_id))
+    existing_ids = {requirement.req_id for requirement in existing}
+    next_ordinal = max((requirement.ordinal for requirement in existing), default=-1) + 1
+    ordered: list[Requirement] = []
+    for req_id, requirement in unique.items():
+        if req_id in existing_ids:
+            continue
+        ordered.append(replace(requirement, ordinal=next_ordinal))
+        next_ordinal += 1
     persist_sorted(
         writer, [(requirement.req_id, requirement) for requirement in ordered],
         lambda store, requirement: store.add_requirement_if_absent(requirement),
@@ -266,8 +315,10 @@ def run_extract(
 
     gate_requirements = writer.call(lambda store: work.pending_gate(store, run_id))
     gate_jobs: list[tuple[Any, Any]] = []
+    gate_metas: dict[Any, CallMeta] = {}
     for requirement in gate_requirements:
         meta = CallMeta(stage="extract", item_ref=f"gate:{requirement.req_id}", call_type="jev_gate")
+        gate_metas[requirement.req_id] = meta
         gate_jobs.append(
             (
                 requirement.req_id,
@@ -281,7 +332,7 @@ def run_extract(
                 ),
             )
         )
-    gate_results = _fan_out(pool, gate_jobs)
+    gate_results = _fan_out(pool, gate_jobs, on_error=_attempt_recorder(writer, run_id, gate_metas))
 
     def apply_gate(store, item) -> None:
         requirement, outcome = item
@@ -319,6 +370,7 @@ def run_index_llm(
         )
         chunks = index.control_chunks(controls, chunk_size=settings.execution.chunk_size)
         jobs: list[tuple[Any, Any]] = []
+        metas: dict[Any, CallMeta] = {}
         for position, chunk in enumerate(chunks):
             ref = f"catalog:{catalog['catalog_id']}:chunk:{position}"
             meta = CallMeta(
@@ -326,9 +378,10 @@ def run_index_llm(
                 prompt_hash=indexing_prompt.PROMPT_HASH,
             )
             jobs.append((ref, lambda chunk=chunk, meta=meta: index.label_chunk(llm, chunk, meta=meta)))
+            metas[ref] = meta
         labels: dict[str, tuple[str, str]] = {}
         failed = False
-        for _key, outcome, error in _fan_out(pool, jobs):
+        for _key, outcome, error in _fan_out(pool, jobs, on_error=_attempt_recorder(writer, run_id, metas)):
             if error is not None:
                 failed = True
             elif outcome:
@@ -381,7 +434,13 @@ def run_retrieve(
         )
         for requirement in requirements
     ]
-    results = _fan_out(pool, jobs)
+    metas = {
+        requirement.req_id: CallMeta(
+            stage="retrieve", item_ref=f"req:{requirement.req_id}", call_type="llm_retrieve"
+        )
+        for requirement in requirements
+    }
+    results = _fan_out(pool, jobs, on_error=_attempt_recorder(writer, run_id, metas))
 
     def apply(store, item) -> None:
         requirement, pairs = item
@@ -424,6 +483,7 @@ def run_verify(
     persisted: list[tuple[Any, Any]] = []
     if settings.jev.batch and items:
         batch_jobs = []
+        batch_metas: dict[Any, CallMeta] = {}
         for start in range(0, len(items), settings.jev.batch_size):
             group = items[start : start + settings.jev.batch_size]
             pair_group = [pair for pair, _requirement, _control in group]
@@ -431,6 +491,7 @@ def run_verify(
             meta = CallMeta(
                 stage="verify", item_ref=f"batch:{pair_group[0].pair_id}", call_type="jev_noul"
             )
+            batch_metas[pair_group[0].pair_id] = meta
             batch_jobs.append(
                 (
                     pair_group[0].pair_id,
@@ -446,13 +507,17 @@ def run_verify(
                     ),
                 )
             )
-        for _key, value, error in _fan_out(pool, batch_jobs):
+        for _key, value, error in _fan_out(
+            pool, batch_jobs, on_error=_attempt_recorder(writer, run_id, batch_metas)
+        ):
             if error is None:
                 persisted.extend((pair.pair_id, (pair, outcome)) for pair, outcome in value)
     else:
         jobs = []
+        metas: dict[Any, CallMeta] = {}
         for pair in pairs:
             meta = CallMeta(stage="verify", item_ref=work.pair_ref(pair.req_id, pair.catalog_id, pair.control_id), call_type="jev_noul")
+            metas[pair.pair_id] = meta
             jobs.append(
                 (
                     pair.pair_id,
@@ -466,7 +531,13 @@ def run_verify(
                     ),
                 )
             )
-        persisted = [(key, item) for key, item, error in _fan_out(pool, jobs) if error is None]
+        persisted = [
+            (key, item)
+            for key, item, error in _fan_out(
+                pool, jobs, on_error=_attempt_recorder(writer, run_id, metas)
+            )
+            if error is None
+        ]
 
     def apply(store, item) -> None:
         pair, outcome = item
@@ -494,6 +565,7 @@ def run_classify(
     persisted: list[tuple[Any, Any]] = []
     if settings.jev.batch and items:
         batch_jobs = []
+        batch_metas: dict[Any, CallMeta] = {}
         for start in range(0, len(items), settings.jev.batch_size):
             group = items[start : start + settings.jev.batch_size]
             pair_group = [pair for pair, _requirement, _control in group]
@@ -501,6 +573,7 @@ def run_classify(
             meta = CallMeta(
                 stage="classify", item_ref=f"batch:{pair_group[0].pair_id}", call_type="jev_choice"
             )
+            batch_metas[pair_group[0].pair_id] = meta
             batch_jobs.append(
                 (
                     pair_group[0].pair_id,
@@ -515,13 +588,17 @@ def run_classify(
                     ),
                 )
             )
-        for _key, value, error in _fan_out(pool, batch_jobs):
+        for _key, value, error in _fan_out(
+            pool, batch_jobs, on_error=_attempt_recorder(writer, run_id, batch_metas)
+        ):
             if error is None:
                 persisted.extend((pair.pair_id, (pair, outcome)) for pair, outcome in value)
     else:
         jobs = []
+        metas: dict[Any, CallMeta] = {}
         for pair in pairs:
             meta = CallMeta(stage="classify", item_ref=f"pair:{pair.pair_id}", call_type="jev_choice")
+            metas[pair.pair_id] = meta
             jobs.append(
                 (
                     pair.pair_id,
@@ -535,7 +612,13 @@ def run_classify(
                     ),
                 )
             )
-        persisted = [(key, item) for key, item, error in _fan_out(pool, jobs) if error is None]
+        persisted = [
+            (key, item)
+            for key, item, error in _fan_out(
+                pool, jobs, on_error=_attempt_recorder(writer, run_id, metas)
+            )
+            if error is None
+        ]
 
     def apply(store, item) -> None:
         pair, outcome = item
@@ -614,6 +697,9 @@ def run_pipeline(
         else:
             writer.call(lambda store: store.set_run_status(selected, "index_incomplete"))
         counts = writer.call(lambda store: store.counts(selected))
+    except BaseException as error:
+        _stamp_failure(writer, selected, error)
+        raise
     finally:
         if llm_http is not None:
             llm_http.close()

@@ -152,6 +152,13 @@ class RunStore:
             (self._now(), error, run_id, stage),
         )
 
+    def fail_running_stages(self, run_id: str, error: str) -> None:
+        self._conn.execute(
+            "UPDATE stage_runs SET status = 'failed', finished_at = ?, error = ?"
+            " WHERE run_id = ? AND status = 'running'",
+            (self._now(), error, run_id),
+        )
+
     def get_stage(self, run_id: str, stage: str) -> Optional[dict[str, Any]]:
         row = self._conn.execute(
             "SELECT * FROM stage_runs WHERE run_id = ? AND stage = ?", (run_id, stage)
@@ -606,6 +613,13 @@ class RunStore:
             ),
         )
         return evidence_id
+
+    def list_attempts(self, run_id: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM attempts WHERE run_id = ? ORDER BY created_at, attempt_id",
+            (run_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def list_evidence(self, run_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 
 from smeargle.domain.clock import FrozenClock
-from smeargle.domain.ids import UuidIdFactory
+from smeargle.domain.ids import UuidIdFactory, doc_id_for
 from smeargle.errors import InputError
 from smeargle.pipeline import load
 from smeargle.store.run_store import RunStore
@@ -56,3 +56,19 @@ def test_load_marks_stage_complete(store, tmp_path):
     doc.write_text("alpha", encoding="utf-8")
     load.run_load(store, "run-1", [doc])
     assert store.get_stage("run-1", "load")["status"] == "complete"
+
+
+def test_load_rerun_after_partial_load_is_idempotent(store, tmp_path):
+    first = tmp_path / "a.txt"
+    first.write_text("alpha", encoding="utf-8")
+    second = tmp_path / "b.md"
+    second.write_text("beta", encoding="utf-8")
+    ordered = sorted([first, second], key=lambda path: doc_id_for(path.read_bytes()))
+
+    load.run_load(store, "run-1", [ordered[0]])
+    documents = load.run_load(store, "run-1", [first, second])
+
+    assert len(documents) == 2
+    rows = store.list_documents("run-1")
+    assert len(rows) == 2
+    assert [row["ordinal"] for row in rows] == [0, 1]

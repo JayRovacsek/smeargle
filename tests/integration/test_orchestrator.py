@@ -153,6 +153,23 @@ def test_fatal_auth_failure_aborts_run(tmp_path):
 
 
 @respx.mock
+def test_fatal_abort_stamps_stage_and_run_failure(tmp_path):
+    settings = _settings(tmp_path)
+    document, catalog = _fixtures(tmp_path)
+    respx.post("https://llm.example/v1/chat/completions").mock(
+        return_value=httpx.Response(401, json={"error": "denied"})
+    )
+    respx.post("https://jev.example/v1/systemone").mock(
+        return_value=httpx.Response(200, json=_answers(("yes", 0.9)))
+    )
+    with pytest.raises(ServiceError):
+        _run(tmp_path, settings, document, catalog)
+    with RunStore.open(settings.state_dir) as store:
+        assert store.get_run("run-1")["status"] == "failed"
+        assert store.get_stage("run-1", "extract")["status"] == "failed"
+
+
+@respx.mock
 def test_classification_unmapped_records_no_mapping(tmp_path):
     settings = _settings(tmp_path)
     document, catalog = _fixtures(tmp_path)
@@ -257,3 +274,81 @@ def test_incomplete_index_defers_retrieval_until_resumed(tmp_path):
         assert store.get_run("run-1")["status"] == "mapped"
         assert store.list_requirements("run-1")[0].retrieve_status == "nominated"
         assert store.counts("run-1")["mappings"] == 1
+
+
+@respx.mock
+def test_partial_extract_resume_does_not_duplicate_ordinals(tmp_path):
+    settings = _settings(tmp_path, execution={"chunk_size": 100, "chunk_overlap": 0})
+    document, catalog = _fixtures(tmp_path)
+    document.write_text("REQ-ALPHA " + "a" * 190 + "REQ-BETA " + "b" * 191, encoding="utf-8")
+    fail_beta = {"value": True}
+
+    def chat_router(request):
+        prompt = json.loads(request.content)["messages"][0]["content"]
+        if "extract normative requirements" in prompt:
+            if fail_beta["value"] and "REQ-BETA" in prompt:
+                return httpx.Response(200, json=_chat('{"requirements": "invalid"}'))
+            if "REQ-ALPHA" in prompt:
+                return httpx.Response(
+                    200,
+                    json=_chat(json.dumps({"requirements": [{"text": "Alpha MUST hold.", "keyword": "MUST"}]})),
+                )
+            if "REQ-BETA" in prompt:
+                return httpx.Response(
+                    200,
+                    json=_chat(json.dumps({"requirements": [{"text": "Beta MUST hold.", "keyword": "MUST"}]})),
+                )
+            return httpx.Response(200, json=_chat(json.dumps({"requirements": []})))
+        if "classify security controls" in prompt:
+            return httpx.Response(
+                200,
+                json=_chat(json.dumps({"labels": [{"control_id": "c-1.1", "domain": "access", "family": "Access"}]})),
+            )
+        if "control domains" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"domains": []})))
+        return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
+
+    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://jev.example/v1/systemone").mock(side_effect=_jev_router)
+
+    _run(tmp_path, settings, document, catalog)
+    fail_beta["value"] = False
+    _run(tmp_path, settings, document, catalog)
+    with RunStore.open(settings.state_dir) as store:
+        requirements = store.list_requirements("run-1")
+        ordinals = [requirement.ordinal for requirement in requirements]
+        assert sorted(ordinals) == [0, 1]
+        assert {requirement.normalized_text for requirement in requirements} == {
+            "Alpha MUST hold.",
+            "Beta MUST hold.",
+        }
+
+
+@respx.mock
+def test_per_item_extract_failure_persists_attempt_trace(tmp_path):
+    settings = _settings(tmp_path)
+    document, catalog = _fixtures(tmp_path)
+
+    def chat_router(request):
+        prompt = json.loads(request.content)["messages"][0]["content"]
+        if "extract normative requirements" in prompt:
+            return httpx.Response(200, json=_chat('{"requirements": "invalid"}'))
+        if "classify security controls" in prompt:
+            return httpx.Response(
+                200,
+                json=_chat(json.dumps({"labels": [{"control_id": "c-1.1", "domain": "access", "family": "Access"}]})),
+            )
+        if "control domains" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"domains": []})))
+        return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
+
+    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://jev.example/v1/systemone").mock(side_effect=_jev_router)
+
+    _run(tmp_path, settings, document, catalog)
+    with RunStore.open(settings.state_dir) as store:
+        attempts = store.list_attempts("run-1")
+        assert any(
+            attempt["stage"] == "extract" and attempt["error_class"] == "ServiceError"
+            for attempt in attempts
+        )
