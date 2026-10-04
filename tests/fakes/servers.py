@@ -25,15 +25,22 @@ class _Handler(BaseHTTPRequestHandler):
 
 class FakeHttpService:
     def __init__(self, responder):
-        self.calls = 0
+        self._calls = 0
+        self._lock = threading.Lock()
         self._responder = responder
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         self._server.responder = self._respond
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
     def _respond(self, path, body):
-        self.calls += 1
+        with self._lock:
+            self._calls += 1
         return self._responder(path, body)
+
+    @property
+    def calls(self):
+        with self._lock:
+            return self._calls
 
     @property
     def url(self):
