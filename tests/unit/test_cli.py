@@ -15,11 +15,51 @@ def test_help_lists_subcommands(capsys):
         assert command in out
 
 
-def test_extract_reports_not_implemented(capsys):
-    code = main(["extract"])
-    err = capsys.readouterr().err
+def test_extract_and_map_remain_thin_placeholders(capsys):
+    assert main(["extract"]) == 2
+    assert main(["map"]) == 2
+    assert "not implemented" in capsys.readouterr().err
+
+
+def test_help_lists_pipeline_options(capsys):
+    main(["--help"])
+    out = capsys.readouterr().out
+    for option in ("--llm-endpoint", "--jev-endpoint", "--mapped-threshold", "--concurrency"):
+        assert option in out
+
+
+def _minimal_inputs(tmp_path):
+    document = tmp_path / "a.txt"
+    document.write_text("MUST x", encoding="utf-8")
+    catalog = tmp_path / "c.json"
+    catalog.write_text('{"catalog": {"name": "V", "securityControls": []}}', encoding="utf-8")
+    return document, catalog
+
+
+def test_run_requires_llm_endpoint(tmp_path, capsys):
+    document, catalog = _minimal_inputs(tmp_path)
+    code = main(
+        [
+            "--state-dir", str(tmp_path / "s"), "--output", str(tmp_path / "o"),
+            "--jev-endpoint", "https://jev.example",
+            "run", "-i", str(document), "-c", str(catalog),
+        ]
+    )
     assert code == 2
-    assert "not implemented in Phase 2" in err
+    assert "--llm-endpoint" in capsys.readouterr().err
+
+
+def test_run_requires_jev_endpoint(tmp_path, capsys):
+    document, catalog = _minimal_inputs(tmp_path)
+    code = main(
+        [
+            "--state-dir", str(tmp_path / "s"), "--output", str(tmp_path / "o"),
+            "--llm-endpoint", "https://llm.example",
+            "run", "-i", str(document), "-c", str(catalog),
+        ]
+    )
+    assert code == 2
+    assert "--jev-endpoint" in capsys.readouterr().err
 
 
 def test_unknown_option_is_usage_error():
@@ -93,6 +133,10 @@ def test_run_missing_input_returns_input_exit_code(tmp_path):
             str(tmp_path / "state"),
             "--output",
             str(tmp_path / "out"),
+            "--llm-endpoint",
+            "https://llm.example",
+            "--jev-endpoint",
+            "https://jev.example",
             "run",
             "-c",
             str(catalog),

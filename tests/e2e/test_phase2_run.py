@@ -1,11 +1,22 @@
 import json
 import sqlite3
 
+import httpx
+import respx
 from support.schemas import validate_against_schema
 
 from smeargle.cli import main
 
 
+def _chat(content):
+    return {"choices": [{"message": {"content": content}}]}
+
+
+def _answers(answer, confidence):
+    return {"answers": [{"question": "q", "answer": answer, "answer_confidence": confidence}]}
+
+
+@respx.mock
 def test_phase2_run_ingests_and_emits_valid_catalog(tmp_path):
     document = tmp_path / "spec.txt"
     document.write_text("The system MUST encrypt data at rest.", encoding="utf-8")
@@ -31,6 +42,35 @@ def test_phase2_run_ingests_and_emits_valid_catalog(tmp_path):
     state = tmp_path / "state"
     output = tmp_path / "out"
 
+    def chat_router(request):
+        prompt = json.loads(request.content)["messages"][0]["content"]
+        if "extract normative requirements" in prompt:
+            return httpx.Response(
+                200, json=_chat(json.dumps({"requirements": [{"text": "MUST x", "keyword": "MUST"}]}))
+            )
+        if "classify security controls" in prompt:
+            return httpx.Response(
+                200,
+                json=_chat(
+                    json.dumps(
+                        {"labels": [{"control_id": "c-1.1", "domain": "access", "family": "Access"}]}
+                    )
+                ),
+            )
+        if "control domains" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"domains": ["access"]})))
+        return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
+
+    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://jev.example/v1/systemone").mock(
+        side_effect=[
+            httpx.Response(200, json=_answers("yes", 0.9)),
+            httpx.Response(200, json=_answers("MUST", 0.9)),
+            httpx.Response(200, json=_answers("yes", 0.9)),
+            httpx.Response(200, json=_answers("subset-of", 0.85)),
+        ]
+    )
+
     code = main(
         [
             "--state-dir",
@@ -38,6 +78,10 @@ def test_phase2_run_ingests_and_emits_valid_catalog(tmp_path):
             "--output",
             str(output),
             "--yes",
+            "--llm-endpoint",
+            "https://llm.example",
+            "--jev-endpoint",
+            "https://jev.example",
             "run",
             "-i",
             str(document),

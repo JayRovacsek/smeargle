@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import typer
 
@@ -55,6 +55,27 @@ def root(
     force: bool = typer.Option(False, "--force", help="Start a new run."),
     verbose: bool = typer.Option(False, "--verbose", help="Verbose logging."),
     yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompts."),
+    llm_endpoint: Optional[str] = typer.Option(None, "--llm-endpoint"),
+    llm_model: Optional[str] = typer.Option(None, "--llm-model"),
+    llm_auth_file: Optional[Path] = typer.Option(None, "--llm-auth-file"),
+    llm_api_key_env: Optional[str] = typer.Option(None, "--llm-api-key-env"),
+    llm_timeout: Optional[float] = typer.Option(None, "--llm-timeout"),
+    llm_retries: Optional[int] = typer.Option(None, "--llm-retries"),
+    llm_temperature: Optional[float] = typer.Option(None, "--llm-temperature"),
+    jev_endpoint: Optional[str] = typer.Option(None, "--jev-endpoint"),
+    jev_model: Optional[str] = typer.Option(None, "--jev-model"),
+    jev_auth_file: Optional[Path] = typer.Option(None, "--jev-auth-file"),
+    jev_api_key_env: Optional[str] = typer.Option(None, "--jev-api-key-env"),
+    jev_timeout: Optional[float] = typer.Option(None, "--jev-timeout"),
+    jev_retries: Optional[int] = typer.Option(None, "--jev-retries"),
+    jev_batch: Optional[bool] = typer.Option(None, "--jev-batch/--no-jev-batch"),
+    jev_batch_size: Optional[int] = typer.Option(None, "--jev-batch-size"),
+    jev_min_confidence: Optional[float] = typer.Option(None, "--jev-min-confidence"),
+    extract_gate_threshold: Optional[float] = typer.Option(None, "--extract-gate-threshold"),
+    mapped_threshold: Optional[float] = typer.Option(None, "--mapped-threshold"),
+    category_high: Optional[float] = typer.Option(None, "--category-high"),
+    category_medium: Optional[float] = typer.Option(None, "--category-medium"),
+    concurrency: Optional[int] = typer.Option(None, "--concurrency"),
     version: bool = typer.Option(False, "--version", help="Show version and exit."),
     catalog_format: Optional[str] = typer.Option(
         None, "--catalog-format", help="auto or oscal."
@@ -74,7 +95,7 @@ def root(
     if catalog_format is not None and catalog_format not in {"auto", "oscal"}:
         raise UsageError("--catalog-format must be 'auto' or 'oscal'")
 
-    overrides: dict[str, object] = {}
+    overrides: dict[str, Any] = {}
     if output is not None:
         overrides["output"] = output
     if state_dir is not None:
@@ -94,6 +115,43 @@ def root(
         execution["catalog_format"] = catalog_format
     if execution:
         overrides["execution"] = execution
+
+    llm_overrides = {
+        key: value
+        for key, value in {
+            "endpoint": llm_endpoint, "model": llm_model, "auth_file": llm_auth_file,
+            "api_key_env": llm_api_key_env, "timeout": llm_timeout, "retries": llm_retries,
+            "temperature": llm_temperature,
+        }.items()
+        if value is not None
+    }
+    if llm_overrides:
+        overrides["llm"] = llm_overrides
+    jev_overrides = {
+        key: value
+        for key, value in {
+            "endpoint": jev_endpoint, "model": jev_model, "auth_file": jev_auth_file,
+            "api_key_env": jev_api_key_env, "timeout": jev_timeout, "retries": jev_retries,
+            "batch": jev_batch, "batch_size": jev_batch_size,
+            "min_confidence": jev_min_confidence,
+        }.items()
+        if value is not None
+    }
+    if jev_overrides:
+        overrides["jev"] = jev_overrides
+    mapping_overrides = {
+        key: value
+        for key, value in {
+            "extract_gate_threshold": extract_gate_threshold, "mapped_threshold": mapped_threshold,
+            "category_high": category_high, "category_medium": category_medium,
+        }.items()
+        if value is not None
+    }
+    if mapping_overrides:
+        overrides["mapping"] = mapping_overrides
+    if concurrency is not None:
+        execution_overrides = overrides.setdefault("execution", {})
+        execution_overrides["concurrency"] = concurrency
 
     # --- Phase 1 remediation (MUST be preserved) ---
     try:
@@ -121,7 +179,7 @@ def run(
     input: Optional[List[Path]] = typer.Option(None, "-i", "--input", help="Input document."),
     catalog: Optional[List[Path]] = typer.Option(None, "-c", "--catalog", help="Catalog."),
 ) -> None:
-    """Load inputs, ingest catalogs, and stop before the LLM stages."""
+    """Run the full pipeline (Stages 0-5)."""
     settings = _resolve_settings(ctx)
     input_paths = [Path(p) for p in input] if input else [Path(p) for p in settings.inputs]
     catalog_paths = (
@@ -133,9 +191,13 @@ def run(
         raise UsageError("run requires at least one --catalog")
     if settings.output is None:
         raise UsageError("run requires --output")
+    if not settings.llm.endpoint:
+        raise UsageError("run requires --llm-endpoint")
+    if not settings.jev.endpoint:
+        raise UsageError("run requires --jev-endpoint")
 
     _configure_oscal(settings)
-    result = run_pipeline.run_ingestion(
+    result = run_pipeline.run_pipeline(
         state_dir=settings.state_dir,
         output=settings.output,
         input_paths=input_paths,
@@ -146,11 +208,8 @@ def run(
         run_id=settings.execution.run_id,
     )
     typer.echo(
-        f"run {result.run_id}: {result.document_count} document(s),"
-        f" {result.catalog_count} catalog(s), {result.control_count} control(s)"
-    )
-    typer.echo(
-        "phase 2: ingestion complete; extraction/index LLM stages are not implemented yet"
+        f"run {result.run_id}: {result.requirement_count} requirement(s),"
+        f" {result.candidate_count} candidate pair(s)"
     )
 
 
@@ -216,6 +275,10 @@ def status(ctx: typer.Context) -> None:
             counts = store.counts(row["run_id"])
             summary = " ".join(f"{name}={value}" for name, value in counts.items())
             typer.echo(f"{row['run_id']} {row['status']} {summary}")
+            for stage in ("load", "extract", "index", "retrieve", "verify", "classify"):
+                stage_row = store.get_stage(row["run_id"], stage)
+                if stage_row is not None:
+                    typer.echo(f"  {stage}: {stage_row['status']}")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
