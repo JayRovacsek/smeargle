@@ -167,3 +167,44 @@ def test_validate_malformed_catalog_returns_catalog_exit_code(tmp_path):
         ["--state-dir", str(tmp_path / "state"), "validate", "-c", str(malformed)]
     )
     assert code == 4
+
+
+def _phase4_settings(tmp_path):
+    from smeargle.config import Settings
+
+    settings = Settings.load()
+    settings.state_dir = tmp_path / "state"
+    settings.output = tmp_path / "out"
+    settings.llm.endpoint = "https://llm.example"
+    settings.jev.endpoint = "https://jev.example"
+    return settings
+
+
+def test_llm_temperature_is_folded_into_config_hash(tmp_path):
+    from smeargle.pipeline import run as run_pipeline
+
+    digest_a = run_pipeline.config_hash(
+        run_pipeline.redact(run_pipeline.config_snapshot(_phase4_settings(tmp_path)))
+    )
+    settings_b = _phase4_settings(tmp_path)
+    settings_b.llm.temperature = 0.7
+    digest_b = run_pipeline.config_hash(
+        run_pipeline.redact(run_pipeline.config_snapshot(settings_b))
+    )
+    assert digest_a != digest_b
+
+
+def test_nomination_cap_option_is_accepted(tmp_path, capsys):
+    document = tmp_path / "a.txt"
+    document.write_text("MUST x", encoding="utf-8")
+    catalog = tmp_path / "c.json"
+    catalog.write_text('{"catalog": {"securityControls": []}}', encoding="utf-8")
+    code = main(
+        [
+            "--state-dir", str(tmp_path / "s"), "--output", str(tmp_path / "o"),
+            "--nomination-cap", "5",
+            "run", "-i", str(document), "-c", str(catalog),
+        ]
+    )
+    assert code == 2
+    assert "--llm-endpoint" in capsys.readouterr().err

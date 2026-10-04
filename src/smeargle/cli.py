@@ -75,6 +75,7 @@ def root(
     mapped_threshold: Optional[float] = typer.Option(None, "--mapped-threshold"),
     category_high: Optional[float] = typer.Option(None, "--category-high"),
     category_medium: Optional[float] = typer.Option(None, "--category-medium"),
+    nomination_cap: Optional[int] = typer.Option(None, "--nomination-cap"),
     concurrency: Optional[int] = typer.Option(None, "--concurrency"),
     version: bool = typer.Option(False, "--version", help="Show version and exit."),
     catalog_format: Optional[str] = typer.Option(
@@ -144,6 +145,7 @@ def root(
         for key, value in {
             "extract_gate_threshold": extract_gate_threshold, "mapped_threshold": mapped_threshold,
             "category_high": category_high, "category_medium": category_medium,
+            "nomination_cap": nomination_cap,
         }.items()
         if value is not None
     }
