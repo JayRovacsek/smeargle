@@ -19,12 +19,8 @@ def test_duplicate_json_keys_are_rejected_after_repairs():
         build_client(base_url="https://llm.example", timeout=5.0),
         model="m", retries=0, structured_output=False,
     )
-    try:
+    with pytest.raises(ServiceError):
         llm.complete_json(wire.ExtractionResponseModel, [{"role": "user", "content": "x"}])
-    except ServiceError:
-        pass
-    else:
-        raise AssertionError("duplicate keys were coerced")
 
 
 def test_out_of_range_probability_is_rejected():
