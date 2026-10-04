@@ -1,0 +1,259 @@
+import json
+from datetime import datetime, timezone
+
+import httpx
+import pytest
+import respx
+
+from smeargle.config import Settings
+from smeargle.domain.clock import FrozenClock
+from smeargle.domain.ids import UuidIdFactory
+from smeargle.errors import ServiceError
+from smeargle.pipeline import run as run_pipeline
+from smeargle.store.run_store import RunStore
+
+
+def _settings(tmp_path, **overrides):
+    settings = Settings.load(overrides=overrides)
+    settings.output = tmp_path / "out"
+    settings.state_dir = tmp_path / "state"
+    settings.llm.endpoint = "https://llm.example"
+    settings.llm.model = "test-model"
+    settings.jev.endpoint = "https://jev.example"
+    settings.jev.model = "jev-model"
+    return settings
+
+
+def _chat(content):
+    return {"choices": [{"message": {"content": content}}]}
+
+
+def _answers(*specs):
+    return {"answers": [{"question": "q", "answer": a, "answer_confidence": c} for a, c in specs]}
+
+
+def _jev_router(request):
+    kind = json.loads(request.content)["questions"][0]["kind"]
+    if kind == "choice":
+        return httpx.Response(200, json=_answers(("MUST", 0.9)))
+    return httpx.Response(200, json=_answers(("yes", 0.9)))
+
+
+def _fixtures(tmp_path):
+    document = tmp_path / "spec.txt"
+    document.write_text("The system MUST encrypt data at rest.", encoding="utf-8")
+    catalog = tmp_path / "vendor.json"
+    catalog.write_text(
+        json.dumps(
+            {
+                "catalog": {
+                    "name": "V",
+                    "securityControls": [
+                        {"controlId": "1.1", "title": "Policy", "family": "Access"}
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    return document, catalog
+
+
+def _run(tmp_path, settings, document, catalog):
+    return run_pipeline.run_pipeline(
+        state_dir=settings.state_dir,
+        output=settings.output,
+        input_paths=[document],
+        catalog_paths=[catalog],
+        settings=settings,
+        clock=FrozenClock(datetime(2026, 1, 1, tzinfo=timezone.utc)),
+        id_factory=UuidIdFactory(),
+        run_id="run-1",
+    )
+
+
+@respx.mock
+def test_full_pipeline_persists_requirements_pairs_and_mappings(tmp_path):
+    settings = _settings(tmp_path)
+    document, catalog = _fixtures(tmp_path)
+
+    def chat_router(request):
+        body = json.loads(request.content)
+        prompt = body["messages"][0]["content"]
+        if "extract normative requirements" in prompt:
+            return httpx.Response(
+                200,
+                json=_chat(
+                    json.dumps(
+                        {"requirements": [{"text": "The system MUST encrypt data at rest.", "keyword": "MUST"}]}
+                    )
+                ),
+            )
+        if "classify security controls" in prompt:
+            return httpx.Response(
+                200,
+                json=_chat(json.dumps({"labels": [{"control_id": "c-1.1", "domain": "access", "family": "Access"}]})),
+            )
+        if "control domains" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"domains": ["access"]})))
+        return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
+
+    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://jev.example/v1/systemone").mock(
+        side_effect=[
+            httpx.Response(200, json=_answers(("yes", 0.9))),
+            httpx.Response(200, json=_answers(("MUST", 0.9))),
+            httpx.Response(200, json=_answers(("yes", 0.9))),
+            httpx.Response(200, json=_answers(("subset-of", 0.85))),
+        ]
+    )
+
+    result = _run(tmp_path, settings, document, catalog)
+    assert result.requirement_count == 1
+    assert result.candidate_count == 1
+    with RunStore.open(settings.state_dir) as store:
+        assert store.counts("run-1")["mappings"] == 1
+        assert store.list_requirements("run-1")[0].gate_status == "passed"
+        assert store.list_mappings("run-1")[0]["relation"] == "subset-of"
+
+
+@respx.mock
+def test_no_candidates_marks_requirement_none_terminal(tmp_path):
+    settings = _settings(tmp_path)
+    document, catalog = _fixtures(tmp_path)
+
+    def chat_router(request):
+        prompt = json.loads(request.content)["messages"][0]["content"]
+        if "extract normative requirements" in prompt:
+            return httpx.Response(
+                200, json=_chat(json.dumps({"requirements": [{"text": "MUST x", "keyword": "MUST"}]}))
+            )
+        if "classify security controls" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"labels": []})))
+        return httpx.Response(200, json=_chat(json.dumps({"domains": []})))
+
+    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://jev.example/v1/systemone").mock(side_effect=_jev_router)
+    _run(tmp_path, settings, document, catalog)
+    with RunStore.open(settings.state_dir) as store:
+        assert store.list_requirements("run-1")[0].retrieve_status == "none"
+        assert store.counts("run-1")["candidate_pairs"] == 0
+
+
+@respx.mock
+def test_fatal_auth_failure_aborts_run(tmp_path):
+    settings = _settings(tmp_path)
+    document, catalog = _fixtures(tmp_path)
+    respx.post("https://llm.example/v1/chat/completions").mock(
+        return_value=httpx.Response(401, json={"error": "denied"})
+    )
+    respx.post("https://jev.example/v1/systemone").mock(return_value=httpx.Response(200, json=_answers(("yes", 0.9))))
+    with pytest.raises(ServiceError):
+        _run(tmp_path, settings, document, catalog)
+
+
+@respx.mock
+def test_classification_unmapped_records_no_mapping(tmp_path):
+    settings = _settings(tmp_path)
+    document, catalog = _fixtures(tmp_path)
+
+    def chat_router(request):
+        prompt = json.loads(request.content)["messages"][0]["content"]
+        if "extract normative requirements" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"requirements": [{"text": "MUST x", "keyword": "MUST"}]})))
+        if "classify security controls" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"labels": [{"control_id": "c-1.1", "domain": "access", "family": "Access"}]})))
+        if "control domains" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"domains": ["access"]})))
+        return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
+
+    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://jev.example/v1/systemone").mock(
+        side_effect=[
+            httpx.Response(200, json=_answers(("yes", 0.9))),
+            httpx.Response(200, json=_answers(("MUST", 0.9))),
+            httpx.Response(200, json=_answers(("yes", 0.9))),
+            httpx.Response(200, json=_answers(("no-relationship", 0.9))),
+        ]
+    )
+    _run(tmp_path, settings, document, catalog)
+    with RunStore.open(settings.state_dir) as store:
+        assert store.counts("run-1")["mappings"] == 0
+        pair = store.list_candidate_pairs("run-1")[0]
+        assert pair.verify_status == "passed"
+        assert store.get_candidate_pair("run-1", pair.pair_id)["classify_status"] == "unmapped"
+
+
+@respx.mock
+def test_resume_skips_completed_work(tmp_path):
+    settings = _settings(tmp_path)
+    document, catalog = _fixtures(tmp_path)
+    llm_calls = {"count": 0}
+
+    def chat_router(request):
+        llm_calls["count"] += 1
+        prompt = json.loads(request.content)["messages"][0]["content"]
+        if "extract normative requirements" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"requirements": [{"text": "MUST x", "keyword": "MUST"}]})))
+        if "classify security controls" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"labels": [{"control_id": "c-1.1", "domain": "access", "family": "Access"}]})))
+        if "control domains" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"domains": ["access"]})))
+        return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
+
+    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://jev.example/v1/systemone").mock(
+        side_effect=[
+            httpx.Response(200, json=_answers(("yes", 0.9))),
+            httpx.Response(200, json=_answers(("MUST", 0.9))),
+            httpx.Response(200, json=_answers(("yes", 0.9))),
+            httpx.Response(200, json=_answers(("subset-of", 0.85))),
+        ]
+    )
+    _run(tmp_path, settings, document, catalog)
+    first = llm_calls["count"]
+    _run(tmp_path, settings, document, catalog)
+    assert llm_calls["count"] == first
+
+
+@respx.mock
+def test_incomplete_index_defers_retrieval_until_resumed(tmp_path):
+    settings = _settings(tmp_path)
+    document, catalog = _fixtures(tmp_path)
+    fail_indexing = {"value": True}
+
+    def chat_router(request):
+        prompt = json.loads(request.content)["messages"][0]["content"]
+        if "classify security controls" in prompt:
+            if fail_indexing["value"]:
+                return httpx.Response(200, json=_chat('{"labels": "nope"}'))
+            return httpx.Response(200, json=_chat(json.dumps({"labels": [{"control_id": "c-1.1", "domain": "access", "family": "Access"}]})))
+        if "extract normative requirements" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"requirements": [{"text": "MUST x", "keyword": "MUST"}]})))
+        if "control domains" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"domains": ["access"]})))
+        return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
+
+    def jev_router(request):
+        question = json.loads(request.content)["questions"][0]
+        if question["kind"] == "noul":
+            return httpx.Response(200, json=_answers(("yes", 0.9)))
+        if "MUST" in question.get("options", []):
+            return httpx.Response(200, json=_answers(("MUST", 0.9)))
+        return httpx.Response(200, json=_answers(("subset-of", 0.85)))
+
+    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://jev.example/v1/systemone").mock(side_effect=jev_router)
+
+    _run(tmp_path, settings, document, catalog)
+    with RunStore.open(settings.state_dir) as store:
+        assert store.get_run("run-1")["status"] == "index_incomplete"
+        assert store.list_requirements("run-1")[0].retrieve_status is None
+        assert store.counts("run-1")["mappings"] == 0
+
+    fail_indexing["value"] = False
+    _run(tmp_path, settings, document, catalog)
+    with RunStore.open(settings.state_dir) as store:
+        assert store.get_run("run-1")["status"] == "mapped"
+        assert store.list_requirements("run-1")[0].retrieve_status == "nominated"
+        assert store.counts("run-1")["mappings"] == 1
