@@ -1,12 +1,14 @@
 import json
 
 import httpx
+import pytest
 import respx
 from fakes.clients import RecordingRecorder
 
 from smeargle.clients.http import build_client
 from smeargle.clients.jev import LayaJevClient
 from smeargle.domain.jev import JevQuestion
+from smeargle.errors import ServiceError
 
 
 def _answer(answer: str, confidence: float, entropy: float | None = None) -> dict:
@@ -66,6 +68,16 @@ def test_systemone_batch_maps_results_positionally():
         ["a", "b", "c"], [[question], [question], [question]]
     )
     assert [r.answers[0].answer for r in results] == ["for-a", "for-b", "for-c"]
+
+
+@respx.mock
+def test_batch_short_result_array_raises_service_error():
+    respx.post("https://jev.example/v1/systemone/batch").mock(
+        return_value=httpx.Response(200, json={"results": [[_answer("only-one", 0.5)]]})
+    )
+    question = JevQuestion(question="q?", kind="noul")
+    with pytest.raises(ServiceError):
+        _client(retries=0, batch=True).systemone_batch(["a", "b"], [[question], [question]])
 
 
 @respx.mock

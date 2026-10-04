@@ -47,6 +47,20 @@ def test_respects_retry_after():
     assert policy.slept == [2.0]
 
 
+def test_retry_after_is_clamped_to_cap():
+    responses = [httpx.Response(429, headers={"Retry-After": "999999"}), httpx.Response(200)]
+    policy = RecordingPolicy(retries=3, cap=8.0)
+    request_with_retry(lambda: responses.pop(0), policy=policy, on_attempt=lambda _a: None)
+    assert policy.slept == [8.0]
+
+
+def test_non_finite_retry_after_falls_back_to_bounded_backoff():
+    responses = [httpx.Response(429, headers={"Retry-After": "inf"}), httpx.Response(200)]
+    policy = RecordingPolicy(retries=3, cap=8.0, base=0.0)
+    request_with_retry(lambda: responses.pop(0), policy=policy, on_attempt=lambda _a: None)
+    assert policy.slept == [0.0]
+
+
 def test_gives_up_after_retries_with_service_error():
     calls = 0
 

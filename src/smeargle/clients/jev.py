@@ -82,6 +82,11 @@ class LayaJevClient:
             ).model_dump(exclude_none=True)
             response = self._post("/v1/systemone/batch", payload, meta)
             parsed = JevBatchResponseModel.model_validate(self._safe_json(response))
+            if len(parsed.results) != len(group):
+                raise ServiceError(
+                    f"JEV batch returned {len(parsed.results)} result(s) "
+                    f"for {len(group)} submitted state(s)"
+                )
             for (_state, qs), answers in zip(group, parsed.results):
                 results.append(jev_result_to_domain(qs[0], answers))
         return results

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 import time
 from dataclasses import dataclass
@@ -36,9 +37,12 @@ def _retry_after(response: Optional[httpx.Response]) -> Optional[float]:
     if value is None:
         return None
     try:
-        return max(0.0, float(value))
+        parsed = float(value)
     except ValueError:
         return None
+    if not math.isfinite(parsed):
+        return None
+    return max(0.0, parsed)
 
 
 class RetryPolicy:
@@ -60,7 +64,7 @@ class RetryPolicy:
     def delay(self, attempt_no: int, response: Optional[httpx.Response] = None) -> float:
         retry_after = _retry_after(response)
         if retry_after is not None:
-            return retry_after
+            return min(self.cap, retry_after)
         ceiling = min(self.cap, self.base * (2 ** (attempt_no - 1)))
         return self._rng.uniform(0.0, ceiling)
 
