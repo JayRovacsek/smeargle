@@ -15,5 +15,11 @@ def prompt_hash(name: str, template: str) -> str:
     return sha256_hex(payload.encode("utf-8"))
 
 
+_NEUTRALISED_MARKER = "[REDACTED-UNTRUSTED-MARKER]"
+
+
 def delimit_untrusted(text: str) -> str:
-    return f"{UNTRUSTED_OPEN}\n{text}\n{UNTRUSTED_CLOSE}"
+    neutralised = text.replace(UNTRUSTED_OPEN, _NEUTRALISED_MARKER).replace(
+        UNTRUSTED_CLOSE, _NEUTRALISED_MARKER
+    )
+    return f"{UNTRUSTED_OPEN}\n{neutralised}\n{UNTRUSTED_CLOSE}"
