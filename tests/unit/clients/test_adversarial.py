@@ -25,6 +25,4 @@ def test_duplicate_json_keys_are_rejected_after_repairs():
 
 def test_out_of_range_probability_is_rejected():
     with pytest.raises(ValidationError):
-        wire.JevResponseModel.model_validate(
-            {"answers": [{"answer": "yes", "answer_confidence": -0.1}]}
-        )
+        wire.JevSystemOneResponseModel.model_validate({"answers": {"q0": {"type": "noul", "noul": -0.1}}})

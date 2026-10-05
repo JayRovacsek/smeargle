@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Literal, Sequence
+from typing import Annotated, Any, Literal, Mapping, Sequence, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -156,3 +156,70 @@ def jev_result_to_domain(question: JevQuestion, answers: Sequence[JevAnswerModel
         for answer in answers
     )
     return JevResult(answers=domain_answers)
+
+
+class JevNoulAnswerModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["noul"]
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    noul: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class JevChoiceAnswerModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["choice"]
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    choice: str = Field(min_length=1)
+    probabilities: dict[str, float] = Field(default_factory=dict)
+
+
+JevSingleAnswer = Annotated[
+    Union[JevNoulAnswerModel, JevChoiceAnswerModel], Field(discriminator="type")
+]
+
+
+class JevSystemOneResponseModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    answers: dict[str, JevSingleAnswer] = Field(default_factory=dict)
+
+
+def question_to_keyed_wire(question: JevQuestion) -> dict[str, Any]:
+    wire: dict[str, Any] = {"type": question.kind, "question": question.question}
+    if question.kind == "choice":
+        wire["criteria"] = {option: option for option in question.options}
+    return wire
+
+
+def single_result_to_domain(
+    questions: Sequence[JevQuestion], answers: Mapping[str, JevSingleAnswer]
+) -> JevResult:
+    domain_answers: list[JevAnswer] = []
+    for index, question in enumerate(questions):
+        answer = answers.get(f"q{index}")
+        if answer is None:
+            continue
+        if answer.type == "noul":
+            probability = answer.noul if answer.noul is not None else (answer.confidence or 0.0)
+            domain_answers.append(
+                JevAnswer(
+                    question=question.question,
+                    answer="yes" if probability >= 0.5 else "no",
+                    answer_confidence=probability,
+                    confidence=answer.confidence,
+                )
+            )
+        else:
+            domain_answers.append(
+                JevAnswer(
+                    question=question.question,
+                    answer=answer.choice,
+                    answer_confidence=answer.probabilities.get(
+                        answer.choice, answer.confidence or 0.0
+                    ),
+                    confidence=answer.confidence,
+                )
+            )
+    return JevResult(answers=tuple(domain_answers))

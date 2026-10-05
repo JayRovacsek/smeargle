@@ -77,9 +77,15 @@ def test_installed_binary_zero_relation_run_omits_mapping_collection(tmp_path):
         return {"choices": [{"message": {"content": json.dumps(content)}}]}
 
     def empty_jev(path, body):
-        question = body["questions"][0]
-        answer = "yes" if question["kind"] == "noul" else "MUST"
-        return {"answers": [{"question": "q", "answer": answer, "answer_confidence": 0.9}]}
+        question = next(iter(body["questions"].values()))
+        if question["type"] == "noul":
+            payload = {"type": "noul", "action": {"act_probability": 1}, "confidence": 0.9, "noul": 0.9}
+        else:
+            payload = {
+                "type": "choice", "action": {"act_probability": 1}, "confidence": 0.9,
+                "choice": "MUST", "probabilities": {"MUST": 0.9},
+            }
+        return {"answers": {"q0": payload}}
 
     document, catalog = _fixtures(tmp_path)
     with FakeHttpService(empty_llm) as llm, FakeHttpService(empty_jev) as jev:

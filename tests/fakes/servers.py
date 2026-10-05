@@ -68,12 +68,23 @@ def llm_responder(path, body):
     return {"choices": [{"message": {"content": json.dumps(content)}}]}
 
 
+def _noul(confidence):
+    return {"type": "noul", "action": {"act_probability": 1}, "confidence": confidence, "noul": confidence}
+
+
+def _choice(choice, confidence):
+    return {
+        "type": "choice", "action": {"act_probability": 1}, "confidence": confidence,
+        "choice": choice, "probabilities": {choice: confidence},
+    }
+
+
 def jev_responder(path, body):
-    questions = body.get("questions", [])
-    question = questions[0] if questions else {"kind": "noul"}
-    if question["kind"] == "noul":
-        return {"answers": [{"question": "q", "answer": "yes", "answer_confidence": 0.9}]}
-    options = question.get("options", [])
-    if "MUST" in options:
-        return {"answers": [{"question": "q", "answer": "MUST", "answer_confidence": 0.9}]}
-    return {"answers": [{"question": "q", "answer": "subset-of", "answer_confidence": 0.85}]}
+    questions = body.get("questions", {})
+    question = next(iter(questions.values())) if questions else {"type": "noul"}
+    if question["type"] == "noul":
+        return {"answers": {"q0": _noul(0.9)}}
+    criteria = question.get("criteria", {})
+    if "MUST" in criteria:
+        return {"answers": {"q0": _choice("MUST", 0.9)}}
+    return {"answers": {"q0": _choice("subset-of", 0.85)}}

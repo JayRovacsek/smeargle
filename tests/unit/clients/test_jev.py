@@ -18,6 +18,10 @@ def _answer(answer: str, confidence: float, entropy: float | None = None) -> dic
     return payload
 
 
+def _noul(confidence: float) -> dict:
+    return {"type": "noul", "action": {"act_probability": 1}, "confidence": confidence, "noul": confidence}
+
+
 def _client(**kwargs):
     return LayaJevClient(
         build_client(base_url="https://jev.example", timeout=5.0), model="jev-1", **kwargs
@@ -27,7 +31,7 @@ def _client(**kwargs):
 @respx.mock
 def test_systemone_noul_probability_is_answer_confidence():
     route = respx.post("https://jev.example/v1/systemone").mock(
-        return_value=httpx.Response(200, json={"answers": [_answer("yes", 0.83)]})
+        return_value=httpx.Response(200, json={"answers": {"q0": _noul(0.83)}})
     )
     question = JevQuestion(question="Is this genuine?", kind="noul")
     recorder = RecordingRecorder()
@@ -37,13 +41,16 @@ def test_systemone_noul_probability_is_answer_confidence():
     assert recorder.responses[0]["attempt_no"] == 1
     body = json.loads(route.calls[0].request.content)
     assert body["model"] == "jev-1"
-    assert body["questions"][0]["kind"] == "noul"
+    assert body["questions"]["q0"]["type"] == "noul"
 
 
 @respx.mock
 def test_choice_sends_options_and_records_entropy_separately():
     route = respx.post("https://jev.example/v1/systemone").mock(
-        return_value=httpx.Response(200, json={"answers": [_answer("subset-of", 0.7, 0.25)]})
+        return_value=httpx.Response(200, json={"answers": {"q0": {
+            "type": "choice", "action": {"act_probability": 1}, "confidence": 0.25,
+            "choice": "subset-of", "probabilities": {"subset-of": 0.7, "equal-to": 0.3},
+        }}})
     )
     question = JevQuestion(question="Relation?", kind="choice", options=("subset-of", "equal-to"))
     result = _client(retries=0).systemone("state", [question])
@@ -51,7 +58,7 @@ def test_choice_sends_options_and_records_entropy_separately():
     assert result.answers[0].answer_confidence == 0.7
     assert result.answers[0].confidence == 0.25
     body = json.loads(route.calls[0].request.content)
-    assert body["questions"][0]["options"] == ["subset-of", "equal-to"]
+    assert body["questions"]["q0"]["criteria"] == {"subset-of": "subset-of", "equal-to": "equal-to"}
 
 
 @respx.mock
@@ -83,7 +90,7 @@ def test_batch_short_result_array_raises_service_error():
 @respx.mock
 def test_batch_disabled_falls_back_to_sequential_calls():
     route = respx.post("https://jev.example/v1/systemone").mock(
-        return_value=httpx.Response(200, json={"answers": [_answer("yes", 0.9)]})
+        return_value=httpx.Response(200, json={"answers": {"q0": _noul(0.9)}})
     )
     question = JevQuestion(question="q?", kind="noul")
     _client(retries=0, batch=False).systemone_batch(["a", "b"], [[question], [question]])

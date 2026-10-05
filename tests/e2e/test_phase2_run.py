@@ -13,7 +13,14 @@ def _chat(content):
 
 
 def _answers(answer, confidence):
-    return {"answers": [{"question": "q", "answer": answer, "answer_confidence": confidence}]}
+    if answer in {"yes", "no"}:
+        payload = {"type": "noul", "action": {"act_probability": 1}, "confidence": confidence, "noul": confidence}
+    else:
+        payload = {
+            "type": "choice", "action": {"act_probability": 1}, "confidence": confidence,
+            "choice": answer, "probabilities": {answer: confidence},
+        }
+    return {"answers": {"q0": payload}}
 
 
 @respx.mock

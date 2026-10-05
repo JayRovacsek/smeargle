@@ -28,13 +28,22 @@ def _chat(content):
     return {"choices": [{"message": {"content": content}}]}
 
 
+def _single_answer(answer, confidence):
+    if answer in {"yes", "no"}:
+        return {"type": "noul", "action": {"act_probability": 1}, "confidence": confidence, "noul": confidence}
+    return {
+        "type": "choice", "action": {"act_probability": 1}, "confidence": confidence,
+        "choice": answer, "probabilities": {answer: confidence},
+    }
+
+
 def _answers(*specs):
-    return {"answers": [{"question": "q", "answer": a, "answer_confidence": c} for a, c in specs]}
+    return {"answers": {f"q{i}": _single_answer(a, c) for i, (a, c) in enumerate(specs)}}
 
 
 def _jev_router(request):
-    kind = json.loads(request.content)["questions"][0]["kind"]
-    if kind == "choice":
+    question = next(iter(json.loads(request.content)["questions"].values()))
+    if question["type"] == "choice":
         return httpx.Response(200, json=_answers(("MUST", 0.9)))
     return httpx.Response(200, json=_answers(("yes", 0.9)))
 
@@ -252,10 +261,10 @@ def test_incomplete_index_defers_retrieval_until_resumed(tmp_path):
         return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
 
     def jev_router(request):
-        question = json.loads(request.content)["questions"][0]
-        if question["kind"] == "noul":
+        question = next(iter(json.loads(request.content)["questions"].values()))
+        if question["type"] == "noul":
             return httpx.Response(200, json=_answers(("yes", 0.9)))
-        if "MUST" in question.get("options", []):
+        if "MUST" in question.get("criteria", {}):
             return httpx.Response(200, json=_answers(("MUST", 0.9)))
         return httpx.Response(200, json=_answers(("subset-of", 0.85)))
 
@@ -368,10 +377,10 @@ def _mock_pipeline():
         return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
 
     def jev_router(request):
-        question = json.loads(request.content)["questions"][0]
-        if question["kind"] == "noul":
+        question = next(iter(json.loads(request.content)["questions"].values()))
+        if question["type"] == "noul":
             return httpx.Response(200, json=_answers(("yes", 0.9)))
-        if "MUST" in question.get("options", []):
+        if "MUST" in question.get("criteria", {}):
             return httpx.Response(200, json=_answers(("MUST", 0.9)))
         return httpx.Response(200, json=_answers(("subset-of", 0.85)))
 

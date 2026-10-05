@@ -31,7 +31,10 @@ def _choice_numbers(
     answer: Mapping[str, Any] = {}
     if row is not None:
         answers = (row.get("response") or {}).get("answers") or []
-        answer = answers[0] if answers else {}
+        if isinstance(answers, Mapping):
+            answer = next(iter(answers.values()), {})
+        else:
+            answer = answers[0] if answers else {}
     return {
         "answer": answer.get("answer", pair_row["relation"]),
         "answer_confidence": answer.get("answer_confidence",

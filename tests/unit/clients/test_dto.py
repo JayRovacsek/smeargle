@@ -35,11 +35,11 @@ def test_out_of_range_probability_is_rejected():
 
 
 def test_jev_response_converts_to_domain_values():
-    response = dto.JevResponseModel.model_validate(
-        {"answers": [{"question": "q", "answer": "yes", "answer_confidence": 0.9}]}
+    response = dto.JevSystemOneResponseModel.model_validate(
+        {"answers": {"q0": {"type": "noul", "action": {"act_probability": 1}, "noul": 0.9}}}
     )
     question = JevQuestion(question="q", kind="noul")
-    result = dto.jev_result_to_domain(question, response.answers)
+    result = dto.single_result_to_domain([question], response.answers)
     assert result.answers[0].answer == "yes"
     assert result.answers[0].answer_confidence == 0.9
     assert result.answers[0].confidence is None

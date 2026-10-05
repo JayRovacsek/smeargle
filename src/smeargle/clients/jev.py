@@ -10,10 +10,11 @@ import httpx
 from smeargle.clients.dto import (
     JevBatchRequestModel,
     JevBatchResponseModel,
-    JevRequestModel,
-    JevResponseModel,
+    JevSystemOneResponseModel,
     jev_result_to_domain,
+    question_to_keyed_wire,
     question_to_wire,
+    single_result_to_domain,
 )
 from smeargle.clients.ports import CallMeta, CallRecorder
 from smeargle.clients.retry import Attempt, RetryPolicy, request_with_retry
@@ -52,16 +53,19 @@ class LayaJevClient:
     def systemone(
         self, state: str, questions: Sequence[JevQuestion], *, meta: Optional[CallMeta] = None
     ) -> JevResult:
-        payload = JevRequestModel(
-            model=self._model,
-            state=state,
-            questions=[question_to_wire(question) for question in questions],
-            min_confidence=self._min_confidence,
-        ).model_dump(exclude_none=True)
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "state": state,
+            "questions": {f"q{i}": question_to_keyed_wire(q) for i, q in enumerate(questions)},
+        }
+        if self._min_confidence is not None:
+            payload["min_confidence"] = self._min_confidence
         response = self._post("/v1/systemone", payload, meta)
-        parsed = JevResponseModel.model_validate(self._safe_json(response))
-        return jev_result_to_domain(questions[0], parsed.answers)
+        parsed = JevSystemOneResponseModel.model_validate(self._safe_json(response))
+        return single_result_to_domain(questions, parsed.answers)
 
+    # The reference server does not implement /v1/systemone/batch; this wire
+    # shape follows the spec and remains unverified against a live endpoint.
     def systemone_batch(
         self,
         states: Sequence[str],
