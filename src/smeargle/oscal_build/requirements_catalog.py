@@ -9,7 +9,7 @@ from smeargle.domain.ids import IdFactory
 from smeargle.domain.requirements import Requirement
 from smeargle.domain.run import Ledger
 from smeargle.errors import IntegrityError
-from smeargle.oscal_build.common import metadata, truncate
+from smeargle.oscal_build.common import CUSTOM_NS, metadata, truncate
 
 
 def _check_unique(requirements: Iterable[Requirement]) -> None:
@@ -28,10 +28,12 @@ def _group_title(document: Mapping[str, Any]) -> str:
 
 def _doc_props(document: Mapping[str, Any]) -> list[dict[str, str]]:
     return [
-        {"name": "source-path", "value": document["path"] or document["doc_id"]},
-        {"name": "source-uri", "value": document["uri"] or document["doc_id"]},
-        {"name": "document-id", "value": document["doc_id"]},
-        {"name": "content-sha256", "value": document["content_sha256"]},
+        {"name": "source-path", "value": document["path"] or document["doc_id"],
+         "ns": CUSTOM_NS},
+        {"name": "source-uri", "value": document["uri"] or document["doc_id"],
+         "ns": CUSTOM_NS},
+        {"name": "document-id", "value": document["doc_id"], "ns": CUSTOM_NS},
+        {"name": "content-sha256", "value": document["content_sha256"], "ns": CUSTOM_NS},
     ]
 
 

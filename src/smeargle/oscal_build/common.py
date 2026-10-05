@@ -7,6 +7,7 @@ from typing import Any
 from smeargle.domain.clock import Clock
 
 OSCAL_VERSION = "1.2.3"
+CUSTOM_NS = "urn:smeargle:oscal:ns"
 
 
 def oscal_timestamp(clock: Clock) -> str:

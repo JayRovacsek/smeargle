@@ -8,7 +8,7 @@ from typing import Any, Mapping
 from smeargle.domain.clock import Clock
 from smeargle.domain.ids import IdFactory
 from smeargle.domain.run import Ledger
-from smeargle.oscal_build.common import metadata
+from smeargle.oscal_build.common import CUSTOM_NS, metadata
 
 
 def _resource(id_factory: IdFactory, run_id: str, name: str) -> dict[str, Any]:
@@ -47,9 +47,9 @@ def build(ledger: Ledger, *, mapping_present: bool, clock: Clock,
         adds = [
             {
                 "props": [
-                    {"name": "mapped-requirement", "value": row["req_id"]},
+                    {"name": "mapped-requirement", "value": row["req_id"], "ns": CUSTOM_NS},
                     {"name": "confidence-category", "value": row["confidence_category"],
-                     "group": row["req_id"]},
+                     "group": row["req_id"], "ns": CUSTOM_NS},
                 ],
                 "links": [
                     {"rel": "reference", "href": f"#{requirements_resource}",

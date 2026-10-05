@@ -24,6 +24,7 @@ def test_alters_keyed_by_control_id_with_one_add_per_requirement():
     first = alter["adds"][0]
     assert first["props"][1] == {
         "name": "confidence-category", "value": "high", "group": "req-1",
+        "ns": "urn:smeargle:oscal:ns",
     }
     resource_uuid = IDS.uuid_for("artifact-resource", "run-1:requirements-catalog.json")
     assert first["links"][0] == {
