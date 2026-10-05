@@ -47,6 +47,7 @@ class ExecutionSettings(BaseModel):
     log_format: Literal["text", "json"] = "text"
     chunk_size: int = Field(default=2000, ge=1)
     chunk_overlap: int = Field(default=200, ge=0)
+    control_chunk_chars: int = Field(default=16000, ge=1)
     run_id: Optional[str] = None
     force: bool = False
     yes: bool = False

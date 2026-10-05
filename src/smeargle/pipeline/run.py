@@ -413,7 +413,9 @@ def run_index_llm(
         controls = writer.call(
             lambda store: store.list_controls(run_id, catalog["catalog_id"])
         )
-        chunks = index.control_chunks(controls, chunk_size=settings.execution.chunk_size)
+        chunks = index.control_chunks(
+            controls, max_chars=settings.execution.control_chunk_chars
+        )
         jobs: list[tuple[Any, Any]] = []
         metas: dict[Any, CallMeta] = {}
         for position, chunk in enumerate(chunks):

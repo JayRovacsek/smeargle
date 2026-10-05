@@ -118,16 +118,31 @@ def ingest_catalogs(
     return [catalog_id for _path, catalog_id, _parsed in parsed_catalogs]
 
 
-def control_chunks(controls: list[Control], *, chunk_size: int) -> list[list[Control]]:
-    if chunk_size < 1:
-        raise ValueError("chunk_size must be >= 1")
-    return [controls[i : i + chunk_size] for i in range(0, len(controls), chunk_size)]
+def _control_line(control: Control) -> str:
+    return f"{control.control_id} | {control.title} | {control.text}"
+
+
+def control_chunks(controls: list[Control], *, max_chars: int) -> list[list[Control]]:
+    if max_chars < 1:
+        raise ValueError("max_chars must be >= 1")
+    chunks: list[list[Control]] = []
+    current: list[Control] = []
+    size = 0
+    for control in controls:
+        line_length = len(_control_line(control)) + 1
+        if current and size + line_length > max_chars:
+            chunks.append(current)
+            current = []
+            size = 0
+        current.append(control)
+        size += line_length
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def render_control_chunk(controls: list[Control]) -> str:
-    listing = "\n".join(
-        f"{control.control_id} | {control.title} | {control.text}" for control in controls
-    )
+    listing = "\n".join(_control_line(control) for control in controls)
     return indexing_prompt.render_indexing(listing)
 
 
