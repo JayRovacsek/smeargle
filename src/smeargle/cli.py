@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -16,6 +17,8 @@ from smeargle.errors import (
     EXIT_ABORTED,
     EXIT_SUCCESS,
     EXIT_UNEXPECTED,
+    AbortedError,
+    GapsError,
     SmeargleError,
     UsageError,
     exit_code_for,
@@ -23,6 +26,7 @@ from smeargle.errors import (
 from smeargle.observability import configure_logging
 from smeargle.oscal_build import facade
 from smeargle.pipeline import run as run_pipeline
+from smeargle.pipeline.run import RunResult as RunPipelineResult  # noqa: F401
 from smeargle.store.db import DB_FILENAME
 from smeargle.store.run_store import RunStore
 
@@ -171,8 +175,47 @@ def root(
         raise typer.Exit(code=EXIT_SUCCESS)
 
 
-def _not_implemented(name: str) -> None:
-    raise UsageError(f"'{name}' is not implemented in Phase 2")
+def _estimate_printer():
+    def printer(kind: str, count: int) -> None:
+        if kind == "requirements":
+            typer.echo(f"extracted {count} requirement(s)")
+        else:
+            typer.echo(f"pre-flight estimate: {count} candidate pair(s) to verify")
+
+    return printer
+
+
+def _select_run_id(settings: Settings, fingerprint: str, config_hash: str) -> Optional[str]:
+    if settings.execution.force:
+        return None
+    with RunStore.open(settings.state_dir) as store:
+        matches = store.find_runs_by_fingerprint(fingerprint)
+    if not matches:
+        return None
+    latest = matches[0]
+    if settings.execution.run_id:
+        return settings.execution.run_id
+    if latest["config_hash"] != config_hash:
+        typer.echo("warning: resuming across a different config_hash")
+    if settings.execution.yes or not sys.stdin.isatty():
+        return latest["run_id"]
+    choice = typer.prompt("resume / new / cancel", default="resume")
+    if choice == "new":
+        return None
+    if choice == "cancel":
+        raise AbortedError("cancelled")
+    return latest["run_id"]
+
+
+def _finish(result: "RunPipelineResult") -> None:
+    if result is None:
+        return
+    typer.echo(
+        f"run {result.run_id}: {result.requirement_count} requirement(s),"
+        f" {result.candidate_count} candidate pair(s)"
+    )
+    if result.gaps:
+        raise GapsError(f"completed with {result.gaps} gap(s)")
 
 
 @app.command()
@@ -181,7 +224,7 @@ def run(
     input: Optional[List[Path]] = typer.Option(None, "-i", "--input", help="Input document."),
     catalog: Optional[List[Path]] = typer.Option(None, "-c", "--catalog", help="Catalog."),
 ) -> None:
-    """Run the full pipeline (Stages 0-5)."""
+    """Run the full pipeline (Stages 0-6)."""
     settings = _resolve_settings(ctx)
     input_paths = [Path(p) for p in input] if input else [Path(p) for p in settings.inputs]
     catalog_paths = (
@@ -199,41 +242,92 @@ def run(
         raise UsageError("run requires --jev-endpoint")
 
     _configure_oscal(settings)
+    fingerprint = run_pipeline.compute_fingerprint(input_paths, catalog_paths)
+    config = run_pipeline.redact(run_pipeline._phase3_config_snapshot(settings))
+    selected = settings.execution.run_id or _select_run_id(
+        settings, fingerprint, run_pipeline.config_hash(config)
+    )
     result = run_pipeline.run_pipeline(
-        state_dir=settings.state_dir,
-        output=settings.output,
-        input_paths=input_paths,
-        catalog_paths=catalog_paths,
-        settings=settings,
-        clock=SystemClock(),
-        id_factory=UuidIdFactory(),
-        run_id=settings.execution.run_id,
+        state_dir=settings.state_dir, output=settings.output, input_paths=input_paths,
+        catalog_paths=catalog_paths, settings=settings, clock=SystemClock(),
+        id_factory=UuidIdFactory(), run_id=selected, estimate=_estimate_printer(),
     )
-    typer.echo(
-        f"run {result.run_id}: {result.requirement_count} requirement(s),"
-        f" {result.candidate_count} candidate pair(s)"
-    )
+    _finish(result)
 
 
 @app.command()
-def extract(ctx: typer.Context) -> None:
-    """Extract requirements only (Stages 0-1)."""
-    _resolve_settings(ctx)
-    _not_implemented("extract")
+def extract(
+    ctx: typer.Context,
+    input: Optional[List[Path]] = typer.Option(None, "-i", "--input", help="Input document."),
+) -> None:
+    """Extract requirements only (Stages 0-1) and emit the partial output."""
+    settings = _resolve_settings(ctx)
+    input_paths = [Path(p) for p in input] if input else [Path(p) for p in settings.inputs]
+    if not input_paths:
+        raise UsageError("extract requires at least one --input")
+    if settings.output is None:
+        raise UsageError("extract requires --output")
+    if not settings.llm.endpoint:
+        raise UsageError("extract requires --llm-endpoint")
+    if not settings.jev.endpoint:
+        raise UsageError("extract requires --jev-endpoint")
+    _configure_oscal(settings)
+    result = run_pipeline.run_extract_only(
+        state_dir=settings.state_dir, output=settings.output, input_paths=input_paths,
+        settings=settings, clock=SystemClock(), id_factory=UuidIdFactory(),
+        run_id=settings.execution.run_id, estimate=_estimate_printer(),
+    )
+    _finish(result)
 
 
 @app.command()
-def map(ctx: typer.Context) -> None:
-    """Map an existing run's requirements to catalogs."""
-    _resolve_settings(ctx)
-    _not_implemented("map")
+def map(
+    ctx: typer.Context,
+    catalog: Optional[List[Path]] = typer.Option(None, "-c", "--catalog", help="Catalog."),
+) -> None:
+    """Map an existing run's requirements to catalogs (Stages 2-6)."""
+    settings = _resolve_settings(ctx)
+    catalog_paths = (
+        [Path(p) for p in catalog] if catalog else [Path(p) for p in settings.catalogs]
+    )
+    if not settings.execution.run_id:
+        raise UsageError("map requires --run-id")
+    if not catalog_paths:
+        raise UsageError("map requires at least one --catalog")
+    if settings.output is None:
+        raise UsageError("map requires --output")
+    if not settings.llm.endpoint:
+        raise UsageError("map requires --llm-endpoint")
+    if not settings.jev.endpoint:
+        raise UsageError("map requires --jev-endpoint")
+    _configure_oscal(settings)
+    result = run_pipeline.run_map(
+        state_dir=settings.state_dir, output=settings.output, catalog_paths=catalog_paths,
+        settings=settings, clock=SystemClock(), id_factory=UuidIdFactory(),
+        run_id=settings.execution.run_id, estimate=_estimate_printer(),
+    )
+    _finish(result)
 
 
 @app.command()
 def resume(ctx: typer.Context) -> None:
     """Continue an interrupted run."""
-    _resolve_settings(ctx)
-    _not_implemented("resume")
+    settings = _resolve_settings(ctx)
+    if not settings.execution.run_id:
+        raise UsageError("resume requires --run-id")
+    if settings.output is None:
+        raise UsageError("resume requires --output")
+    if not settings.llm.endpoint:
+        raise UsageError("resume requires --llm-endpoint")
+    if not settings.jev.endpoint:
+        raise UsageError("resume requires --jev-endpoint")
+    _configure_oscal(settings)
+    result = run_pipeline.resume_run(
+        state_dir=settings.state_dir, output=settings.output, settings=settings,
+        clock=SystemClock(), id_factory=UuidIdFactory(),
+        run_id=settings.execution.run_id, estimate=_estimate_printer(),
+    )
+    _finish(result)
 
 
 @app.command()

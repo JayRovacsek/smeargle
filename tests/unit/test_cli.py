@@ -15,10 +15,12 @@ def test_help_lists_subcommands(capsys):
         assert command in out
 
 
-def test_extract_and_map_remain_thin_placeholders(capsys):
+def test_extract_and_map_require_configuration(capsys):
     assert main(["extract"]) == 2
     assert main(["map"]) == 2
-    assert "not implemented" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "extract requires at least one --input" in err
+    assert "map requires --run-id" in err
 
 
 def test_help_lists_pipeline_options(capsys):
