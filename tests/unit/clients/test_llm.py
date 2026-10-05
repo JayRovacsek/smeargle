@@ -119,3 +119,37 @@ def test_records_evidence_and_attempts_around_retried_call():
 def test_extract_first_json_object_handles_nested_braces_and_strings():
     text = 'prefix {"a": {"b": "}"}} suffix'
     assert extract_first_json_object(text) == '{"a": {"b": "}"}}'
+
+
+@respx.mock
+def test_schema_instruction_is_a_leading_system_message():
+    route = respx.post(URL).mock(
+        side_effect=[
+            httpx.Response(400, json={}),
+            httpx.Response(200, json=_chat('{"requirements": []}')),
+        ]
+    )
+    _client(retries=0).complete_json(
+        wire.ExtractionResponseModel, [{"role": "user", "content": "hi"}]
+    )
+    body = json.loads(route.calls[1].request.content)
+    assert body["messages"][0]["role"] == "system"
+    assert "schema" in body["messages"][0]["content"].lower()
+    assert body["messages"][1] == {"role": "user", "content": "hi"}
+
+
+@respx.mock
+def test_plain_prompt_also_sends_a_leading_system_message():
+    route = respx.post(URL).mock(
+        side_effect=[
+            httpx.Response(400, json={}),
+            httpx.Response(400, json={}),
+            httpx.Response(200, json=_chat('{"requirements": []}')),
+        ]
+    )
+    _client(retries=0).complete_json(
+        wire.ExtractionResponseModel, [{"role": "user", "content": "hi"}]
+    )
+    body = json.loads(route.calls[2].request.content)
+    assert body["messages"][0]["role"] == "system"
+    assert body["messages"][1] == {"role": "user", "content": "hi"}

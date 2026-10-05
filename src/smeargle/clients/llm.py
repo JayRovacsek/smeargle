@@ -153,13 +153,13 @@ class OpenAiCompatibleLLM:
             }
         elif mode == "json_object":
             body["response_format"] = {"type": "json_object"}
-            body["messages"] = list(messages) + [
+            body["messages"] = [
                 {"role": "system", "content": f"Respond with JSON matching this schema: {schema_prompt}"}
-            ]
+            ] + list(messages)
         else:
-            body["messages"] = list(messages) + [
+            body["messages"] = [
                 {"role": "system", "content": f"Respond with one JSON object matching this schema: {schema_prompt}"}
-            ]
+            ] + list(messages)
         return body
 
     def _post(self, body: dict[str, Any], meta: Optional[CallMeta]) -> httpx.Response:
