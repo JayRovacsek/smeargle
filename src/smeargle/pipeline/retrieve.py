@@ -52,7 +52,7 @@ def relevant_domains(
 
 def nominate_controls(
     llm: LLMClient, requirement: str, controls: Sequence[Control], *,
-    meta: Optional[CallMeta] = None,
+    cap: int = 0, meta: Optional[CallMeta] = None,
 ) -> list[str]:
     known = {control.control_id for control in controls}
     listing = [{"id": control.control_id, "text": control.text} for control in controls]
@@ -64,6 +64,8 @@ def nominate_controls(
     for control_id in response.control_ids:
         if control_id in known and control_id not in nominated:
             nominated.append(control_id)
+    if cap > 0:
+        nominated = nominated[:cap]
     return nominated
 
 
@@ -74,6 +76,7 @@ def retrieve_requirement(
     controls: Sequence[Control],
     *,
     meta_prefix: str,
+    cap: int = 0,
 ) -> list[tuple[str, str]]:
     mapping = domain_controls(domain_index, controls)
     chosen = relevant_domains(
@@ -92,6 +95,7 @@ def retrieve_requirement(
             llm,
             requirement.text,
             mapping[domain],
+            cap=cap,
             meta=CallMeta(
                 stage="retrieve", item_ref=f"{meta_prefix}:nominated:{domain}",
                 call_type="llm_nomination",

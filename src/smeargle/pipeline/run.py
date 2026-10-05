@@ -23,9 +23,18 @@ from smeargle.domain.ids import (
 )
 from smeargle.domain.mapping import CandidatePair
 from smeargle.domain.requirements import Requirement
-from smeargle.errors import CatalogError, FatalServiceError, InputError, ServiceError
+from smeargle.errors import (
+    CatalogError,
+    FatalServiceError,
+    InputError,
+    ServiceError,
+    UsageError,
+)
 from smeargle.loaders import registry as loader_registry
 from smeargle.observability import redact
+from smeargle.pipeline import (
+    assemble as assemble_stage,
+)
 from smeargle.pipeline import (
     classify,
     extract,
@@ -140,6 +149,10 @@ class RunResult:
     document_count: int
     requirement_count: int
     candidate_count: int
+    output: Optional[Path] = None
+    gaps: int = 0
+    unmapped_count: int = 0
+    failure_count: int = 0
 
 
 def _is_fatal(error: BaseException) -> bool:
@@ -210,6 +223,33 @@ def _phase3_config_snapshot(settings: Settings) -> dict[str, Any]:
     return snapshot
 
 
+def _record_failures(writer, run_id: str, stage: str, call_type: str, results) -> int:
+    count = 0
+    for key, _value, error in results:
+        if error is None:
+            continue
+        count += 1
+
+        def op(store, key=key, error=error):
+            store.record_attempt(
+                run_id=run_id, stage=stage, item_ref=str(key), call_type=call_type,
+                attempt_no=0, error_class="per_item_failure", error=str(error),
+                duration_ms=0,
+            )
+
+        writer.call(op)
+    return count
+
+
+def _assemble_out(writer, run_id, output, *, settings, clock, id_factory, config, partial):
+    return writer.call(
+        lambda store: assemble_stage.run_assemble(
+            store, run_id, output, clock=clock, id_factory=id_factory,
+            settings=settings, config=config, partial=partial,
+        )
+    )
+
+
 def _build_llm(settings: Settings, bus: EvidenceBus):
     if not settings.llm.endpoint:
         raise ServiceError("llm endpoint is not configured")
@@ -245,7 +285,8 @@ def _build_jev(settings: Settings, bus: EvidenceBus):
 def run_extract(
     writer: Writer, run_id: str, *, settings: Settings, pool: ThreadPoolExecutor,
     llm, jev,
-) -> None:
+) -> int:
+    failures = 0
     writer.call(lambda store: work.claim_stage(store, run_id, "extract"))
     documents = writer.call(lambda store: work.pending_documents(store, run_id))
     jobs: list[tuple[Any, Any]] = []
@@ -277,7 +318,9 @@ def run_extract(
 
     proposals: list[tuple[Any, str, Requirement]] = []
     completed: list[Any] = []
-    for key, outcome, error in _fan_out(pool, jobs, on_error=_attempt_recorder(writer, run_id, metas)):
+    chunk_results = _fan_out(pool, jobs, on_error=_attempt_recorder(writer, run_id, metas))
+    failures += _record_failures(writer, run_id, "extract", "llm_extract", chunk_results)
+    for key, outcome, error in chunk_results:
         if error is not None:
             continue
         completed.append(key)
@@ -333,6 +376,7 @@ def run_extract(
             )
         )
     gate_results = _fan_out(pool, gate_jobs, on_error=_attempt_recorder(writer, run_id, gate_metas))
+    failures += _record_failures(writer, run_id, "extract", "jev_gate", gate_results)
 
     def apply_gate(store, item) -> None:
         requirement, outcome = item
@@ -349,6 +393,7 @@ def run_extract(
         apply_gate,
     )
     writer.call(lambda store: work.complete_stage(store, run_id, "extract"))
+    return failures
 
 
 def run_index_llm(
@@ -406,7 +451,7 @@ def run_index_llm(
 
 def run_retrieve(
     writer: Writer, run_id: str, *, settings: Settings, pool: ThreadPoolExecutor, llm
-) -> None:
+) -> int:
     writer.call(lambda store: work.claim_stage(store, run_id, "retrieve"))
     model_id = settings.llm.model or "default"
     indexes = []
@@ -429,18 +474,14 @@ def run_retrieve(
                 retrieve.retrieve_requirement(
                     llm, requirement, domain_index, controls,
                     meta_prefix=f"req:{requirement.req_id}",
+                    cap=settings.mapping.nomination_cap,
                 ),
             ),
         )
         for requirement in requirements
     ]
-    metas = {
-        requirement.req_id: CallMeta(
-            stage="retrieve", item_ref=f"req:{requirement.req_id}", call_type="llm_retrieve"
-        )
-        for requirement in requirements
-    }
-    results = _fan_out(pool, jobs, on_error=_attempt_recorder(writer, run_id, metas))
+    results = _fan_out(pool, jobs)
+    failures = _record_failures(writer, run_id, "retrieve", "llm_nomination", results)
 
     def apply(store, item) -> None:
         requirement, pairs = item
@@ -465,11 +506,12 @@ def run_retrieve(
         apply,
     )
     writer.call(lambda store: work.complete_stage(store, run_id, "retrieve"))
+    return failures
 
 
 def run_verify(
     writer: Writer, run_id: str, *, settings: Settings, pool: ThreadPoolExecutor, jev
-) -> None:
+) -> int:
     writer.call(lambda store: work.claim_stage(store, run_id, "verify"))
     requirements = {r.req_id: r for r in writer.call(lambda store: store.list_requirements(run_id))}
     controls = {
@@ -481,9 +523,9 @@ def run_verify(
         for pair in pairs
     ]
     persisted: list[tuple[Any, Any]] = []
+    failures = 0
     if settings.jev.batch and items:
         batch_jobs = []
-        batch_metas: dict[Any, CallMeta] = {}
         for start in range(0, len(items), settings.jev.batch_size):
             group = items[start : start + settings.jev.batch_size]
             pair_group = [pair for pair, _requirement, _control in group]
@@ -491,7 +533,6 @@ def run_verify(
             meta = CallMeta(
                 stage="verify", item_ref=f"batch:{pair_group[0].pair_id}", call_type="jev_noul"
             )
-            batch_metas[pair_group[0].pair_id] = meta
             batch_jobs.append(
                 (
                     pair_group[0].pair_id,
@@ -507,17 +548,15 @@ def run_verify(
                     ),
                 )
             )
-        for _key, value, error in _fan_out(
-            pool, batch_jobs, on_error=_attempt_recorder(writer, run_id, batch_metas)
-        ):
+        batch_results = _fan_out(pool, batch_jobs)
+        failures += _record_failures(writer, run_id, "verify", "jev_noul", batch_results)
+        for _key, value, error in batch_results:
             if error is None:
                 persisted.extend((pair.pair_id, (pair, outcome)) for pair, outcome in value)
     else:
         jobs = []
-        metas: dict[Any, CallMeta] = {}
         for pair in pairs:
             meta = CallMeta(stage="verify", item_ref=work.pair_ref(pair.req_id, pair.catalog_id, pair.control_id), call_type="jev_noul")
-            metas[pair.pair_id] = meta
             jobs.append(
                 (
                     pair.pair_id,
@@ -531,13 +570,9 @@ def run_verify(
                     ),
                 )
             )
-        persisted = [
-            (key, item)
-            for key, item, error in _fan_out(
-                pool, jobs, on_error=_attempt_recorder(writer, run_id, metas)
-            )
-            if error is None
-        ]
+        results = _fan_out(pool, jobs)
+        failures += _record_failures(writer, run_id, "verify", "jev_noul", results)
+        persisted = [(key, item) for key, item, error in results if error is None]
 
     def apply(store, item) -> None:
         pair, outcome = item
@@ -547,11 +582,12 @@ def run_verify(
 
     persist_sorted(writer, persisted, apply)
     writer.call(lambda store: work.complete_stage(store, run_id, "verify"))
+    return failures
 
 
 def run_classify(
     writer: Writer, run_id: str, *, settings: Settings, pool: ThreadPoolExecutor, jev
-) -> None:
+) -> int:
     writer.call(lambda store: work.claim_stage(store, run_id, "classify"))
     requirements = {r.req_id: r for r in writer.call(lambda store: store.list_requirements(run_id))}
     controls = {
@@ -563,9 +599,9 @@ def run_classify(
         for pair in pairs
     ]
     persisted: list[tuple[Any, Any]] = []
+    failures = 0
     if settings.jev.batch and items:
         batch_jobs = []
-        batch_metas: dict[Any, CallMeta] = {}
         for start in range(0, len(items), settings.jev.batch_size):
             group = items[start : start + settings.jev.batch_size]
             pair_group = [pair for pair, _requirement, _control in group]
@@ -573,7 +609,6 @@ def run_classify(
             meta = CallMeta(
                 stage="classify", item_ref=f"batch:{pair_group[0].pair_id}", call_type="jev_choice"
             )
-            batch_metas[pair_group[0].pair_id] = meta
             batch_jobs.append(
                 (
                     pair_group[0].pair_id,
@@ -588,17 +623,15 @@ def run_classify(
                     ),
                 )
             )
-        for _key, value, error in _fan_out(
-            pool, batch_jobs, on_error=_attempt_recorder(writer, run_id, batch_metas)
-        ):
+        batch_results = _fan_out(pool, batch_jobs)
+        failures += _record_failures(writer, run_id, "classify", "jev_choice", batch_results)
+        for _key, value, error in batch_results:
             if error is None:
                 persisted.extend((pair.pair_id, (pair, outcome)) for pair, outcome in value)
     else:
         jobs = []
-        metas: dict[Any, CallMeta] = {}
         for pair in pairs:
             meta = CallMeta(stage="classify", item_ref=f"pair:{pair.pair_id}", call_type="jev_choice")
-            metas[pair.pair_id] = meta
             jobs.append(
                 (
                     pair.pair_id,
@@ -612,13 +645,9 @@ def run_classify(
                     ),
                 )
             )
-        persisted = [
-            (key, item)
-            for key, item, error in _fan_out(
-                pool, jobs, on_error=_attempt_recorder(writer, run_id, metas)
-            )
-            if error is None
-        ]
+        results = _fan_out(pool, jobs)
+        failures += _record_failures(writer, run_id, "classify", "jev_choice", results)
+        persisted = [(key, item) for key, item, error in results if error is None]
 
     def apply(store, item) -> None:
         pair, outcome = item
@@ -640,6 +669,7 @@ def run_classify(
 
     persist_sorted(writer, persisted, apply)
     writer.call(lambda store: work.complete_stage(store, run_id, "classify"))
+    return failures
 
 
 def run_pipeline(
@@ -652,50 +682,71 @@ def run_pipeline(
     clock: Clock,
     id_factory: IdFactory,
     run_id: Optional[str] = None,
+    estimate: Optional[Callable[[str, int], None]] = None,
 ) -> RunResult:
     input_paths = [Path(p) for p in input_paths]
     catalog_paths = [Path(p) for p in catalog_paths]
     computed_fingerprint = compute_fingerprint(input_paths, catalog_paths)
-    computed_config_hash = config_hash(redact(_phase3_config_snapshot(settings)))
+    config = redact(_phase3_config_snapshot(settings))
+    computed_config_hash = config_hash(config)
     selected = run_id or settings.execution.run_id or id_factory.run_uuid()
 
     writer = Writer(state_dir, clock=clock, id_factory=id_factory)
     writer.start()
     llm_http = jev_http = None
+    failures = 0
+    assembly = None
+    index_ok = False
     try:
         bus = EvidenceBus(writer, selected)
         llm_http, llm = _build_llm(settings, bus)
         jev_http, jev = _build_jev(settings, bus)
         if writer.call(lambda store: store.get_run(selected)) is None:
-            writer.call(lambda store: store.create_run(selected, computed_fingerprint, computed_config_hash))
+            writer.call(lambda store: store.create_run(
+                selected, computed_fingerprint, computed_config_hash
+            ))
         with ThreadPoolExecutor(max_workers=settings.execution.concurrency) as pool:
             if not writer.call(lambda store: work.stage_complete(store, selected, "load")):
                 writer.call(lambda store: load.run_load(store, selected, input_paths))
             if not writer.call(lambda store: work.stage_complete(store, selected, "index")):
-                writer.call(
-                    lambda store: ingest_catalogs(
-                        store, selected, catalog_paths, output,
-                        catalog_format=settings.execution.catalog_format,
-                        clock=clock, id_factory=id_factory,
-                    )
-                )
+                writer.call(lambda store: ingest_catalogs(
+                    store, selected, catalog_paths, output,
+                    catalog_format=settings.execution.catalog_format,
+                    clock=clock, id_factory=id_factory,
+                ))
             with ThreadPoolExecutor(max_workers=2) as streams:
                 extract_stream = streams.submit(
-                    run_extract, writer, selected, settings=settings, pool=pool, llm=llm, jev=jev
+                    run_extract, writer, selected, settings=settings, pool=pool,
+                    llm=llm, jev=jev,
                 )
                 index_stream = streams.submit(
                     run_index_llm, writer, selected, settings=settings, pool=pool, llm=llm
                 )
-                extract_stream.result()
+                failures += extract_stream.result()
                 index_ok = index_stream.result()
+            requirements = writer.call(lambda store: store.list_requirements(selected))
+            accepted = [r for r in requirements if r.gate_status == "passed"]
+            if estimate is not None:
+                estimate("requirements", len(accepted))
             if index_ok:
-                run_retrieve(writer, selected, settings=settings, pool=pool, llm=llm)
-                run_verify(writer, selected, settings=settings, pool=pool, jev=jev)
-                run_classify(writer, selected, settings=settings, pool=pool, jev=jev)
+                failures += run_retrieve(writer, selected, settings=settings, pool=pool, llm=llm)
+                candidate_count = writer.call(lambda store: store.counts(selected))["candidate_pairs"]
+                if estimate is not None:
+                    estimate("candidates", candidate_count)
+                failures += run_verify(writer, selected, settings=settings, pool=pool, jev=jev)
+                failures += run_classify(writer, selected, settings=settings, pool=pool, jev=jev)
+            else:
+                # An incomplete index is a gap and emits no artifacts: never report a
+                # successful `run` (mirrors run_map).
+                failures += 1
+            writer.call(lambda store: store.set_run_status(
+                selected, "mapped" if index_ok else "index_incomplete", finished=index_ok
+            ))
         if index_ok:
-            writer.call(lambda store: store.set_run_status(selected, "mapped", finished=True))
-        else:
-            writer.call(lambda store: store.set_run_status(selected, "index_incomplete"))
+            assembly = _assemble_out(
+                writer, selected, Path(output), settings=settings, clock=clock,
+                id_factory=id_factory, config=config, partial=False,
+            )
         counts = writer.call(lambda store: store.counts(selected))
     except BaseException as error:
         _stamp_failure(writer, selected, error)
@@ -707,11 +758,162 @@ def run_pipeline(
             jev_http.close()
         writer.stop()
 
+    unmapped = len(assembly.unmapped_requirements) if assembly is not None else 0
     return RunResult(
-        run_id=selected,
-        fingerprint=computed_fingerprint,
-        config_hash=computed_config_hash,
-        document_count=counts["documents"],
-        requirement_count=counts["requirements"],
-        candidate_count=counts["candidate_pairs"],
+        run_id=selected, fingerprint=computed_fingerprint,
+        config_hash=computed_config_hash, document_count=counts["documents"],
+        requirement_count=counts["requirements"], candidate_count=counts["candidate_pairs"],
+        output=Path(output) if assembly is not None else None,
+        gaps=failures + unmapped, unmapped_count=unmapped, failure_count=failures,
+    )
+
+
+def run_extract_only(
+    *,
+    state_dir: Path,
+    output: Path,
+    input_paths: Sequence[Path],
+    settings: Settings,
+    clock: Clock,
+    id_factory: IdFactory,
+    run_id: Optional[str] = None,
+    estimate: Optional[Callable[[str, int], None]] = None,
+) -> RunResult:
+    input_paths = [Path(p) for p in input_paths]
+    computed_fingerprint = compute_fingerprint(input_paths, [])
+    config = redact(_phase3_config_snapshot(settings))
+    selected = run_id or settings.execution.run_id or id_factory.run_uuid()
+    writer = Writer(state_dir, clock=clock, id_factory=id_factory)
+    writer.start()
+    llm_http = jev_http = None
+    failures = 0
+    try:
+        bus = EvidenceBus(writer, selected)
+        llm_http, llm = _build_llm(settings, bus)
+        jev_http, jev = _build_jev(settings, bus)
+        if writer.call(lambda store: store.get_run(selected)) is None:
+            writer.call(lambda store: store.create_run(
+                selected, computed_fingerprint, config_hash(config)
+            ))
+        with ThreadPoolExecutor(max_workers=settings.execution.concurrency) as pool:
+            if not writer.call(lambda store: work.stage_complete(store, selected, "load")):
+                writer.call(lambda store: load.run_load(store, selected, input_paths))
+            failures += run_extract(
+                writer, selected, settings=settings, pool=pool, llm=llm, jev=jev
+            )
+        if estimate is not None:
+            requirements = writer.call(lambda store: store.list_requirements(selected))
+            estimate("requirements", len([r for r in requirements if r.gate_status == "passed"]))
+        _assemble_out(
+            writer, selected, Path(output), settings=settings, clock=clock,
+            id_factory=id_factory, config=config, partial=True,
+        )
+        writer.call(lambda store: store.set_run_status(selected, "extracted", finished=True))
+        counts = writer.call(lambda store: store.counts(selected))
+    finally:
+        if llm_http is not None:
+            llm_http.close()
+        if jev_http is not None:
+            jev_http.close()
+        writer.stop()
+    return RunResult(
+        selected, computed_fingerprint, config_hash(config), counts["documents"],
+        counts["requirements"], counts["candidate_pairs"], output=Path(output),
+        gaps=failures, failure_count=failures,
+    )
+
+
+def run_map(
+    *,
+    state_dir: Path,
+    output: Path,
+    catalog_paths: Sequence[Path],
+    settings: Settings,
+    clock: Clock,
+    id_factory: IdFactory,
+    run_id: str,
+    estimate: Optional[Callable[[str, int], None]] = None,
+) -> RunResult:
+    with RunStore.open(state_dir, clock=clock, id_factory=id_factory) as probe:
+        row = probe.get_run(run_id)
+    if row is None:
+        raise UsageError(f"run '{run_id}' does not exist")
+    config = redact(_phase3_config_snapshot(settings))
+    writer = Writer(state_dir, clock=clock, id_factory=id_factory)
+    writer.start()
+    llm_http = jev_http = None
+    failures = 0
+    assembly = None
+    try:
+        bus = EvidenceBus(writer, run_id)
+        llm_http, llm = _build_llm(settings, bus)
+        jev_http, jev = _build_jev(settings, bus)
+        with ThreadPoolExecutor(max_workers=settings.execution.concurrency) as pool:
+            if not writer.call(lambda store: work.stage_complete(store, run_id, "index")):
+                writer.call(lambda store: ingest_catalogs(
+                    store, run_id, [Path(p) for p in catalog_paths], output,
+                    catalog_format=settings.execution.catalog_format,
+                    clock=clock, id_factory=id_factory,
+                ))
+            index_ok = run_index_llm(writer, run_id, settings=settings, pool=pool, llm=llm)
+            if index_ok:
+                failures += run_retrieve(
+                    writer, run_id, settings=settings, pool=pool, llm=llm
+                )
+                if estimate is not None:
+                    estimate("candidates", writer.call(
+                        lambda store: store.counts(run_id)
+                    )["candidate_pairs"])
+                failures += run_verify(writer, run_id, settings=settings, pool=pool, jev=jev)
+                failures += run_classify(writer, run_id, settings=settings, pool=pool, jev=jev)
+            else:
+                # Mirror run_pipeline: an incomplete domain index must not terminalise
+                # retrieval or emit a misleading "mapped" run.
+                failures += 1
+        if index_ok:
+            # Set the terminal status before assembling so rationale.run.status is current.
+            writer.call(lambda store: store.set_run_status(run_id, "mapped", finished=True))
+            assembly = _assemble_out(
+                writer, run_id, Path(output), settings=settings, clock=clock,
+                id_factory=id_factory, config=config, partial=False,
+            )
+        else:
+            writer.call(lambda store: store.set_run_status(run_id, "index_incomplete"))
+        counts = writer.call(lambda store: store.counts(run_id))
+    finally:
+        if llm_http is not None:
+            llm_http.close()
+        if jev_http is not None:
+            jev_http.close()
+        writer.stop()
+    unmapped = len(assembly.unmapped_requirements) if assembly is not None else 0
+    return RunResult(
+        run_id, row["fingerprint"], row["config_hash"], counts["documents"],
+        counts["requirements"], counts["candidate_pairs"],
+        output=Path(output) if assembly is not None else None,
+        gaps=failures + unmapped, unmapped_count=unmapped, failure_count=failures,
+    )
+
+
+def resume_run(
+    *,
+    state_dir: Path,
+    output: Path,
+    settings: Settings,
+    clock: Clock,
+    id_factory: IdFactory,
+    run_id: str,
+    estimate: Optional[Callable[[str, int], None]] = None,
+) -> RunResult:
+    with RunStore.open(state_dir, clock=clock, id_factory=id_factory) as store:
+        if store.get_run(run_id) is None:
+            raise UsageError(f"run '{run_id}' does not exist")
+        input_paths = [Path(row["path"]) for row in store.list_documents(run_id)]
+        catalog_paths = [Path(row["path"]) for row in store.list_catalogs(run_id)]
+    if not input_paths:
+        raise UsageError(f"run '{run_id}' has no recorded input documents to resume")
+    return run_pipeline(
+        state_dir=state_dir, output=output, input_paths=input_paths,
+        catalog_paths=catalog_paths, settings=settings, clock=clock,
+        id_factory=id_factory, run_id=run_id, estimate=estimate,
     )

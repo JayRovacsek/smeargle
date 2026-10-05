@@ -352,3 +352,99 @@ def test_per_item_extract_failure_persists_attempt_trace(tmp_path):
             attempt["stage"] == "extract" and attempt["error_class"] == "ServiceError"
             for attempt in attempts
         )
+
+
+def _mock_pipeline():
+    def chat_router(request):
+        prompt = json.loads(request.content)["messages"][0]["content"]
+        if "extract normative requirements" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"requirements": [
+                {"text": "The system MUST encrypt data at rest.", "keyword": "MUST"}]})))
+        if "classify security controls" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"labels": [
+                {"control_id": "c-1.1", "domain": "access", "family": "Access"}]})))
+        if "control domains" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"domains": ["access"]})))
+        return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
+
+    def jev_router(request):
+        question = json.loads(request.content)["questions"][0]
+        if question["kind"] == "noul":
+            return httpx.Response(200, json=_answers(("yes", 0.9)))
+        if "MUST" in question.get("options", []):
+            return httpx.Response(200, json=_answers(("MUST", 0.9)))
+        return httpx.Response(200, json=_answers(("subset-of", 0.85)))
+
+    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://jev.example/v1/systemone").mock(side_effect=jev_router)
+
+
+@respx.mock
+def test_run_pipeline_emits_artifacts_and_reports_zero_gaps(tmp_path):
+    _mock_pipeline()
+    settings = _settings(tmp_path)
+    document, catalog = _fixtures(tmp_path)
+    seen = []
+    result = run_pipeline.run_pipeline(
+        state_dir=settings.state_dir, output=settings.output,
+        input_paths=[document], catalog_paths=[catalog], settings=settings,
+        clock=FrozenClock(datetime(2026, 1, 1, tzinfo=timezone.utc)),
+        id_factory=UuidIdFactory(), run_id="run-out",
+        estimate=lambda kind, count: seen.append((kind, count)),
+    )
+    assert result.gaps == 0
+    assert (settings.output / "requirements-catalog.json").exists()
+    assert ("requirements", 1) in seen and any(kind == "candidates" for kind, _ in seen)
+
+
+@respx.mock
+def test_run_extract_only_writes_partial_output(tmp_path):
+    _mock_pipeline()
+    settings = _settings(tmp_path)
+    document, _catalog = _fixtures(tmp_path)
+    result = run_pipeline.run_extract_only(
+        state_dir=settings.state_dir, output=settings.output, input_paths=[document],
+        settings=settings, clock=FrozenClock(datetime(2026, 1, 1, tzinfo=timezone.utc)),
+        id_factory=UuidIdFactory(), run_id="run-x",
+    )
+    assert (settings.output / "requirements-catalog.json").exists()
+    assert not (settings.output / "profile.json").exists()
+    assert result.run_id == "run-x"
+
+
+@respx.mock
+def test_run_map_completes_an_extract_only_run(tmp_path):
+    _mock_pipeline()
+    settings = _settings(tmp_path)
+    document, catalog = _fixtures(tmp_path)
+    run_pipeline.run_extract_only(
+        state_dir=settings.state_dir, output=settings.output, input_paths=[document],
+        settings=settings, clock=FrozenClock(datetime(2026, 1, 1, tzinfo=timezone.utc)),
+        id_factory=UuidIdFactory(), run_id="run-map",
+    )
+    result = run_pipeline.run_map(
+        state_dir=settings.state_dir, output=settings.output, catalog_paths=[catalog],
+        settings=settings, clock=FrozenClock(datetime(2026, 1, 1, tzinfo=timezone.utc)),
+        id_factory=UuidIdFactory(), run_id="run-map",
+    )
+    assert result.run_id == "run-map"
+    assert (settings.output / "profile.json").exists()
+
+
+@respx.mock
+def test_resume_run_reuses_recorded_documents(tmp_path):
+    _mock_pipeline()
+    settings = _settings(tmp_path)
+    document, catalog = _fixtures(tmp_path)
+    run_pipeline.run_pipeline(
+        state_dir=settings.state_dir, output=settings.output,
+        input_paths=[document], catalog_paths=[catalog], settings=settings,
+        clock=FrozenClock(datetime(2026, 1, 1, tzinfo=timezone.utc)),
+        id_factory=UuidIdFactory(), run_id="run-resume",
+    )
+    result = run_pipeline.resume_run(
+        state_dir=settings.state_dir, output=settings.output, settings=settings,
+        clock=FrozenClock(datetime(2026, 1, 1, tzinfo=timezone.utc)),
+        id_factory=UuidIdFactory(), run_id="run-resume",
+    )
+    assert result.run_id == "run-resume"
