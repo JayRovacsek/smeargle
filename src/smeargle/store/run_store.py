@@ -614,9 +614,16 @@ class RunStore:
         )
         return evidence_id
 
+    def list_pair_rows(self, run_id: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM candidate_pairs WHERE run_id = ? ORDER BY pair_id", (run_id,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def list_attempts(self, run_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
-            "SELECT * FROM attempts WHERE run_id = ? ORDER BY created_at, attempt_id",
+            "SELECT * FROM attempts WHERE run_id = ? ORDER BY stage, item_ref,"
+            " call_type, attempt_no",
             (run_id,),
         ).fetchall()
         return [dict(row) for row in rows]
