@@ -58,3 +58,24 @@ def test_retrieve_requirement_returns_catalog_control_pairs():
     assert retrieve.retrieve_requirement(
         empty, _requirement(), _index({"access": ["ac-2"]}), controls, meta_prefix="x"
     ) == []
+
+
+def test_nomination_cap_truncates_deterministically():
+    from fakes.clients import FakeLLMClient
+
+    from smeargle.domain.controls import Control
+    from smeargle.pipeline import retrieve
+
+    controls = [
+        Control("run-1", "c1", "ac-1", "t", "x", "", ""),
+        Control("run-1", "c1", "ac-2", "t", "x", "", ""),
+        Control("run-1", "c1", "ac-3", "t", "x", "", ""),
+    ]
+    llm = FakeLLMClient(responses=[
+        {"control_ids": ["ac-3", "ac-1", "ac-2"]},
+        {"control_ids": ["ac-3", "ac-1", "ac-2"]},
+    ])
+    assert retrieve.nominate_controls(llm, "MUST x", controls, cap=2) == ["ac-3", "ac-1"]
+    assert retrieve.nominate_controls(llm, "MUST x", controls, cap=0) == [
+        "ac-3", "ac-1", "ac-2"
+    ]

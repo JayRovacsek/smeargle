@@ -448,3 +448,47 @@ def test_resume_run_reuses_recorded_documents(tmp_path):
         id_factory=UuidIdFactory(), run_id="run-resume",
     )
     assert result.run_id == "run-resume"
+
+
+@respx.mock
+def test_jev_batching_issues_one_batch_call_for_verification_and_classification(tmp_path):
+    settings = _settings(tmp_path)
+    settings.jev.batch = True
+    settings.jev.batch_size = 64
+    document, catalog = _fixtures(tmp_path)
+
+    def chat_router(request):
+        prompt = json.loads(request.content)["messages"][0]["content"]
+        if "extract normative requirements" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"requirements": [
+                {"text": "The system MUST encrypt data at rest.", "keyword": "MUST"}]})))
+        if "classify security controls" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"labels": [
+                {"control_id": "c-1.1", "domain": "access", "family": "Access"}]})))
+        if "control domains" in prompt:
+            return httpx.Response(200, json=_chat(json.dumps({"domains": ["access"]})))
+        return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
+
+    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    batch = respx.post("https://jev.example/v1/systemone/batch").mock(
+        side_effect=[
+            httpx.Response(200, json={"results": [[
+                {"question": "q", "answer": "yes", "answer_confidence": 0.9}]]}),
+            httpx.Response(200, json={"results": [[
+                {"question": "q", "answer": "subset-of", "answer_confidence": 0.85}]]}),
+        ]
+    )
+    respx.post("https://jev.example/v1/systemone").mock(
+        side_effect=[
+            httpx.Response(200, json=_answers(("yes", 0.9))),
+            httpx.Response(200, json=_answers(("MUST", 0.9))),
+        ]
+    )
+    run_pipeline.run_pipeline(
+        state_dir=settings.state_dir, output=settings.output,
+        input_paths=[document], catalog_paths=[catalog], settings=settings,
+        clock=FrozenClock(datetime(2026, 1, 1, tzinfo=timezone.utc)),
+        id_factory=UuidIdFactory(), run_id="run-batch",
+    )
+    assert batch.call_count == 2
+    assert b'"states"' in batch.calls[0].request.content
