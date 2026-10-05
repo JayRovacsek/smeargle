@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any, List, Optional
@@ -341,23 +342,32 @@ def validate(
     targets = (
         [Path(p) for p in catalog] if catalog else [Path(p) for p in settings.catalogs]
     )
-    if not targets and settings.output is None:
-        typer.echo("nothing to validate")
-        return
     for path in targets:
         parse_catalog(path, settings.execution.catalog_format)
         typer.echo(f"{path}: valid")
-    if settings.output is not None:
-        catalogs_dir = settings.output / "catalogs"
-        if catalogs_dir.is_dir():
-            for path in sorted(catalogs_dir.glob("*.json")):
-                facade.validate("catalog", facade.load_document(path))
-                typer.echo(f"{path}: valid")
+    if settings.output is None:
+        return
+    for name, model in (("requirements-catalog.json", "catalog"),
+                        ("profile.json", "profile"),
+                        ("mapping-collection.json", "mapping-collection")):
+        path = settings.output / name
+        if path.exists():
+            facade.validate(model, facade.load_document(path))
+            typer.echo(f"{path}: valid")
+    rationale = settings.output / "rationale.json"
+    if rationale.exists():
+        json.loads(rationale.read_text(encoding="utf-8"))
+        typer.echo(f"{rationale}: valid")
+    catalogs_dir = settings.output / "catalogs"
+    if catalogs_dir.is_dir():
+        for path in sorted(catalogs_dir.glob("*.json")):
+            facade.validate("catalog", facade.load_document(path))
+            typer.echo(f"{path}: valid")
 
 
 @app.command()
 def status(ctx: typer.Context) -> None:
-    """Show per-stage progress and counts."""
+    """Show per-stage progress, counts, and emitted artifacts."""
     settings = _resolve_settings(ctx)
     if not (settings.state_dir / DB_FILENAME).exists():
         typer.echo("no runs recorded")
@@ -375,6 +385,11 @@ def status(ctx: typer.Context) -> None:
                 stage_row = store.get_stage(row["run_id"], stage)
                 if stage_row is not None:
                     typer.echo(f"  {stage}: {stage_row['status']}")
+    if settings.output is not None:
+        for name in ("requirements-catalog.json", "profile.json",
+                     "mapping-collection.json", "rationale.json"):
+            if (settings.output / name).exists():
+                typer.echo(f"  artifact: {name}")
 
 
 def main(argv: Optional[List[str]] = None) -> int:

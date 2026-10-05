@@ -153,3 +153,44 @@ def test_integrity_failure_exits_seven(tmp_path, monkeypatch):
     assert code == 7
     # The stubbed pipeline writes nothing, so the required output directory is never created.
     assert not (tmp_path / "o").exists()
+
+
+@respx.mock
+def test_validate_accepts_every_emitted_artifact(tmp_path, capsys):
+    _mock()
+    document, catalog = _fixtures(tmp_path)
+    assert main(_common(tmp_path) + ["run", "-i", str(document), "-c", str(catalog)]) == 0
+    capsys.readouterr()
+    code = main([
+        "--state-dir", str(tmp_path / "s"), "--output", str(tmp_path / "o"), "validate",
+    ])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "requirements-catalog.json" in out
+    assert "profile.json" in out
+    assert "rationale.json" in out
+
+
+@respx.mock
+def test_validate_rejects_a_corrupt_artifact(tmp_path, capsys):
+    _mock()
+    document, catalog = _fixtures(tmp_path)
+    assert main(_common(tmp_path) + ["run", "-i", str(document), "-c", str(catalog)]) == 0
+    target = tmp_path / "o" / "profile.json"
+    target.write_text('{"profile": {"uuid": "nope"}}', encoding="utf-8")
+    code = main([
+        "--state-dir", str(tmp_path / "s"), "--output", str(tmp_path / "o"), "validate",
+    ])
+    assert code == 4
+
+
+@respx.mock
+def test_status_reports_artifacts_and_stages(tmp_path, capsys):
+    _mock()
+    document, catalog = _fixtures(tmp_path)
+    assert main(_common(tmp_path) + ["run", "-i", str(document), "-c", str(catalog)]) == 0
+    capsys.readouterr()
+    code = main(["--state-dir", str(tmp_path / "s"), "--output", str(tmp_path / "o"), "status"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "classify" in out
