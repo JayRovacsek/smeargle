@@ -492,3 +492,31 @@ def test_jev_batching_issues_one_batch_call_for_verification_and_classification(
     )
     assert batch.call_count == 2
     assert b'"states"' in batch.calls[0].request.content
+
+
+@respx.mock
+def test_resume_reports_a_persisted_failure_as_a_gap(tmp_path):
+    _mock_pipeline()
+    settings = _settings(tmp_path)
+    document, catalog = _fixtures(tmp_path)
+    run_pipeline.run_pipeline(
+        state_dir=settings.state_dir, output=settings.output,
+        input_paths=[document], catalog_paths=[catalog], settings=settings,
+        clock=FrozenClock(datetime(2026, 1, 1, tzinfo=timezone.utc)),
+        id_factory=UuidIdFactory(), run_id="run-gap",
+    )
+    with RunStore.open(settings.state_dir) as store:
+        store.record_attempt(
+            run_id="run-gap", stage="verify", item_ref="pair-stale",
+            call_type="jev_noul", attempt_no=0,
+            error_class="per_item_failure", error="boom",
+        )
+    result = run_pipeline.resume_run(
+        state_dir=settings.state_dir, output=settings.output, settings=settings,
+        clock=FrozenClock(datetime(2026, 1, 1, tzinfo=timezone.utc)),
+        id_factory=UuidIdFactory(), run_id="run-gap",
+    )
+    rationale = json.loads((settings.output / "rationale.json").read_text())
+    assert rationale["summary"]["failures"] == 1
+    assert result.failure_count == 1
+    assert result.gaps == 1

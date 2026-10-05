@@ -758,13 +758,20 @@ def run_pipeline(
             jev_http.close()
         writer.stop()
 
-    unmapped = len(assembly.unmapped_requirements) if assembly is not None else 0
+    if assembly is not None:
+        unmapped = len(assembly.unmapped_requirements)
+        gap_count = assembly.gaps
+        failure_count = assembly.failures
+    else:
+        unmapped = 0
+        gap_count = failures
+        failure_count = failures
     return RunResult(
         run_id=selected, fingerprint=computed_fingerprint,
         config_hash=computed_config_hash, document_count=counts["documents"],
         requirement_count=counts["requirements"], candidate_count=counts["candidate_pairs"],
         output=Path(output) if assembly is not None else None,
-        gaps=failures + unmapped, unmapped_count=unmapped, failure_count=failures,
+        gaps=gap_count, unmapped_count=unmapped, failure_count=failure_count,
     )
 
 
@@ -804,7 +811,7 @@ def run_extract_only(
         if estimate is not None:
             requirements = writer.call(lambda store: store.list_requirements(selected))
             estimate("requirements", len([r for r in requirements if r.gate_status == "passed"]))
-        _assemble_out(
+        assembly = _assemble_out(
             writer, selected, Path(output), settings=settings, clock=clock,
             id_factory=id_factory, config=config, partial=True,
         )
@@ -816,10 +823,11 @@ def run_extract_only(
         if jev_http is not None:
             jev_http.close()
         writer.stop()
+    unmapped = len(assembly.unmapped_requirements)
     return RunResult(
         selected, computed_fingerprint, config_hash(config), counts["documents"],
         counts["requirements"], counts["candidate_pairs"], output=Path(output),
-        gaps=failures, failure_count=failures,
+        gaps=assembly.gaps, unmapped_count=unmapped, failure_count=assembly.failures,
     )
 
 
@@ -886,12 +894,19 @@ def run_map(
         if jev_http is not None:
             jev_http.close()
         writer.stop()
-    unmapped = len(assembly.unmapped_requirements) if assembly is not None else 0
+    if assembly is not None:
+        unmapped = len(assembly.unmapped_requirements)
+        gap_count = assembly.gaps
+        failure_count = assembly.failures
+    else:
+        unmapped = 0
+        gap_count = failures
+        failure_count = failures
     return RunResult(
         run_id, row["fingerprint"], row["config_hash"], counts["documents"],
         counts["requirements"], counts["candidate_pairs"],
         output=Path(output) if assembly is not None else None,
-        gaps=failures + unmapped, unmapped_count=unmapped, failure_count=failures,
+        gaps=gap_count, unmapped_count=unmapped, failure_count=failure_count,
     )
 
 
