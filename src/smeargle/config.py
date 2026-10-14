@@ -55,6 +55,7 @@ class ExecutionSettings(BaseModel):
     catalog_format: Literal["auto", "oscal"] = "auto"
     gaps_fatal: bool = False
     concurrency: int = Field(default=4, ge=1)
+    redact: bool = True
 
 
 _CONFIG_FILE: ContextVar[Optional[Path]] = ContextVar("smeargle_config_file", default=None)

@@ -9,6 +9,7 @@ from smeargle.observability import (
     configure_logging,
     is_secret_key,
     redact,
+    set_redaction,
 )
 
 
@@ -38,6 +39,16 @@ def test_is_secret_key():
     assert is_secret_key("llm_api_key")
     assert is_secret_key("Authorization")
     assert not is_secret_key("model")
+
+
+def test_set_redaction_disables_and_restores_redaction():
+    data = {"api_key": "s", "path": "a"}
+    try:
+        set_redaction(False)
+        assert redact(data) == data
+    finally:
+        set_redaction(True)
+    assert redact(data)["api_key"] == REDACTED
 
 
 def test_json_formatter_redacts_smeargle_extra():

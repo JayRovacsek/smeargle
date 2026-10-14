@@ -25,7 +25,7 @@ from smeargle.errors import (
     UsageError,
     exit_code_for,
 )
-from smeargle.observability import configure_logging
+from smeargle.observability import configure_logging, set_redaction
 from smeargle.oscal_build import facade
 from smeargle.pipeline import run as run_pipeline
 from smeargle.pipeline.run import RunResult as RunPipelineResult  # noqa: F401
@@ -87,6 +87,12 @@ def root(
     catalog_format: Optional[str] = typer.Option(
         None, "--catalog-format", help="auto or oscal."
     ),
+    redact: Optional[bool] = typer.Option(
+        None, "--redact/--no-redact",
+        help="Redact secret-looking fields from evidence and logs (default on)."
+        " --no-redact writes unredacted payloads and credentials to the state"
+        " database, evidence/ and verbose logs.",
+    ),
 ) -> None:
     if version:
         typer.echo(f"smeargle {__version__}")
@@ -120,6 +126,8 @@ def root(
         execution["yes"] = True
     if catalog_format is not None:
         execution["catalog_format"] = catalog_format
+    if redact is not None:
+        execution["redact"] = redact
     if execution:
         overrides["execution"] = execution
 
@@ -170,6 +178,14 @@ def root(
         raise UsageError(f"invalid configuration: {exc}") from exc
     # --- end Phase 1 remediation ---
     configure_logging(settings.execution.log_format, verbose=settings.execution.verbose)
+    set_redaction(settings.execution.redact)
+    if not settings.execution.redact:
+        typer.secho(
+            "warning: redaction disabled - unredacted model payloads and credentials may"
+            " be written to the state database, evidence/ and verbose logs",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
     ctx.obj = settings
 
     if ctx.invoked_subcommand is None:

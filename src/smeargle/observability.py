@@ -12,6 +12,7 @@ from rich.logging import RichHandler
 from smeargle.console import console
 
 REDACTED = "[REDACTED]"
+_REDACT_ENABLED = True
 _SECRET_MARKERS = (
     "api_key",
     "apikey",
@@ -29,7 +30,14 @@ def is_secret_key(key: str) -> bool:
     return any(marker in lowered for marker in _SECRET_MARKERS)
 
 
+def set_redaction(enabled: bool) -> None:
+    global _REDACT_ENABLED
+    _REDACT_ENABLED = enabled
+
+
 def redact(value: Any) -> Any:
+    if not _REDACT_ENABLED:
+        return value
     if isinstance(value, Mapping):
         return {
             key: (REDACTED if is_secret_key(str(key)) else redact(item))

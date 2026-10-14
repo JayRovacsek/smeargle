@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import tempfile
 import zlib
 from pathlib import Path
 from typing import Any, Mapping
@@ -78,13 +80,23 @@ def run_assemble(
 ) -> emit.Assembly:
     ledger = build_ledger(store, run_id, settings=settings, config=config)
     assembly = emit.assemble(ledger, clock=clock, id_factory=id_factory, partial=partial)
-    # §3 order: assemble → integrity gate (validate everything) → write outputs/export
-    # evidence. A gate failure (exit 7) must leave NO assemble-owned artifacts or evidence
-    # on disk (requirements-catalog/profile/mapping-collection/rationale + evidence/), so
-    # nothing here is written until the gate has passed. Phase 2's Stage 2 `ingest_catalogs`
-    # already wrote output/catalogs/*.json before assembly; that pre-assembly output is
-    # external to this invariant and is deliberately not rolled back.
-    emit.integrity_gate(assembly, ledger, partial=partial, output=Path(output))
-    emit.write_assembly(assembly, Path(output))
-    emit.export_evidence(ledger.evidence, Path(output))
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    # §3 order: assemble → integrity gate (validate everything) → publish outputs/export
+    # evidence. Validation runs against a staging directory that also mirrors the emitted
+    # catalogs, so the assembled documents' relative imports (catalogs/<stem>.json,
+    # requirements-catalog.json) resolve against the documents' own location rather than
+    # the process working directory. Nothing is published into the output directory until
+    # the gate has passed, so a gate failure (exit 7) still leaves NO assemble-owned
+    # artifacts or evidence on disk.
+    with tempfile.TemporaryDirectory(dir=output, prefix=".staging-") as staging_dir:
+        staging = Path(staging_dir)
+        catalogs = output / "catalogs"
+        if catalogs.is_dir():
+            shutil.copytree(catalogs, staging / "catalogs", dirs_exist_ok=True)
+        written = emit.write_assembly(assembly, staging)
+        emit.integrity_gate(assembly, ledger, partial=partial, output=staging)
+        for path in written:
+            shutil.copy2(path, output / path.name)
+    emit.export_evidence(ledger.evidence, output)
     return assembly

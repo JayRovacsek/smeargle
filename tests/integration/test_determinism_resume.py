@@ -200,6 +200,26 @@ def test_incomplete_chunk_stage_is_reissued_on_resume(tmp_path):
 
 
 @respx.mock
+def test_resume_reissues_missing_catalog_files(tmp_path):
+    llm_calls = {"n": 0}
+    _mock_all(llm_calls=llm_calls)
+    settings = _settings(tmp_path)
+    settings.state_dir.mkdir(parents=True, exist_ok=True)
+    documents, catalog = _fixtures(tmp_path)
+    _run(settings, documents, catalog, "run-A")
+
+    emitted = settings.output / "catalogs" / "vendor.json"
+    assert emitted.exists()
+    emitted.unlink()
+
+    llm_after_first = llm_calls["n"]
+    _run(settings, documents, catalog, "run-A")
+
+    assert emitted.exists()
+    assert llm_calls["n"] == llm_after_first
+
+
+@respx.mock
 def test_stage_runs_are_marked_complete(tmp_path):
     _mock_all()
     settings = _settings(tmp_path)

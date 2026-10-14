@@ -1,4 +1,5 @@
 import json
+import logging
 import zlib
 
 import pytest
@@ -10,6 +11,19 @@ from smeargle.domain.requirements import Keyword, Requirement
 from smeargle.errors import IntegrityError
 from smeargle.pipeline import assemble
 from smeargle.store.run_store import CatalogRow, RunStore
+
+_IMPORTED_CATALOG = {
+    "catalog": {
+        "uuid": "11111111-1111-4111-8111-111111111111",
+        "metadata": {
+            "title": "Imported",
+            "last-modified": "2026-01-01T00:00:00Z",
+            "version": "1.0.0",
+            "oscal-version": "1.2.3",
+        },
+        "controls": [{"id": "c-1.1", "title": "Policy"}],
+    }
+}
 
 
 def _settings(tmp_path):
@@ -125,6 +139,24 @@ def test_run_assemble_checks_integrity_before_writing_any_assemble_artifact(tmp_
     assert not (settings.output / "requirements-catalog.json").exists()
     assert not (settings.output / "rationale.json").exists()
     assert not (settings.output / "evidence").exists()
+
+
+def test_run_assemble_resolves_catalog_imports_from_the_output_dir(tmp_path, caplog):
+    settings = _settings(tmp_path)
+    with RunStore.open(settings.state_dir, clock=CLOCK, id_factory=IDS) as store:
+        _seed(store)
+        catalogs_dir = settings.output / "catalogs"
+        catalogs_dir.mkdir(parents=True, exist_ok=True)
+        (catalogs_dir / "vendor.json").write_text(
+            json.dumps(_IMPORTED_CATALOG), encoding="utf-8"
+        )
+        with caplog.at_level(logging.WARNING):
+            result = assemble.run_assemble(
+                store, "run-1", settings.output, clock=CLOCK, id_factory=IDS,
+                settings=settings, config={},
+            )
+    assert result.gaps == 0
+    assert "Failed to load content from source" not in caplog.text
 
 
 def test_decompress_round_trips_compressed_evidence():

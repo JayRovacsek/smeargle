@@ -30,6 +30,23 @@ def test_help_lists_pipeline_options(capsys):
         assert option in out
 
 
+def test_no_redact_flag_disables_application_redaction(tmp_path):
+    from smeargle.observability import redact, set_redaction
+
+    try:
+        assert main(["--no-redact", "--state-dir", str(tmp_path / "s"), "status"]) == 0
+        assert redact({"api_key": "s"}) == {"api_key": "s"}
+    finally:
+        set_redaction(True)
+
+
+def test_redaction_stays_enabled_by_default(tmp_path):
+    from smeargle.observability import REDACTED, redact
+
+    main(["--state-dir", str(tmp_path / "s"), "status"])
+    assert redact({"api_key": "s"})["api_key"] == REDACTED
+
+
 def _minimal_inputs(tmp_path):
     document = tmp_path / "a.txt"
     document.write_text("MUST x", encoding="utf-8")

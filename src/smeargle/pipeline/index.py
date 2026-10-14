@@ -118,6 +118,42 @@ def ingest_catalogs(
     return [catalog_id for _path, catalog_id, _parsed in parsed_catalogs]
 
 
+def emit_catalog_files(
+    catalog_paths: Iterable[Path],
+    output_dir: Path,
+    *,
+    catalog_format: str,
+    clock: Clock,
+    id_factory: IdFactory,
+) -> None:
+    """Re-emit normalised catalog files that are missing from the output directory.
+
+    Idempotent: writes only ``output/catalogs/<stem>.json`` files that do not already
+    exist, so a resumed run (where ``ingest_catalogs`` is skipped because the index
+    stage is complete) still produces the catalog files that the profile imports.
+    """
+    for path in (Path(p) for p in catalog_paths):
+        target = Path(output_dir) / "catalogs" / f"{path.stem}.json"
+        if target.exists():
+            continue
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            raise CatalogError(f"could not read catalog '{path}': {exc}") from exc
+        catalog_id = catalog_id_for(raw)
+        _kind, parsed = parse_catalog(path, catalog_format)
+        document = normalise.build_normalised_catalog(
+            catalog_id=catalog_id,
+            parsed=parsed,
+            source_uri=path.absolute().as_uri(),
+            last_modified=_oscal_timestamp(clock),
+            uuid_for=id_factory.uuid_for,
+        )
+        facade.validate("catalog", document)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(facade.serialise_json("catalog", document), encoding="utf-8")
+
+
 def _control_line(control: Control) -> str:
     return f"{control.control_id} | {control.title} | {control.text}"
 

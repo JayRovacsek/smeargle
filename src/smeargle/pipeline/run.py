@@ -48,7 +48,7 @@ from smeargle.pipeline import (
     work,
 )
 from smeargle.pipeline.executor import EvidenceBus, Writer, persist_sorted
-from smeargle.pipeline.index import ingest_catalogs
+from smeargle.pipeline.index import emit_catalog_files, ingest_catalogs
 from smeargle.prompts import (
     extraction as extraction_prompt,
 )
@@ -63,7 +63,7 @@ from smeargle.store.run_store import RunStore
 if TYPE_CHECKING:
     from rich.progress import Progress
 
-_SECRET_SCOPED_KEYS = {"run_id", "force", "yes", "verbose"}
+_SECRET_SCOPED_KEYS = {"run_id", "force", "yes", "verbose", "redact"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -745,6 +745,11 @@ def run_pipeline(
                     catalog_format=settings.execution.catalog_format,
                     clock=clock, id_factory=id_factory,
                 ))
+            emit_catalog_files(
+                catalog_paths, output,
+                catalog_format=settings.execution.catalog_format,
+                clock=clock, id_factory=id_factory,
+            )
             with ThreadPoolExecutor(max_workers=2) as streams:
                 extract_stream = streams.submit(
                     run_extract, writer, selected, settings=settings, pool=pool,
@@ -906,6 +911,11 @@ def run_map(
                     catalog_format=settings.execution.catalog_format,
                     clock=clock, id_factory=id_factory,
                 ))
+            emit_catalog_files(
+                [Path(p) for p in catalog_paths], output,
+                catalog_format=settings.execution.catalog_format,
+                clock=clock, id_factory=id_factory,
+            )
             index_ok = run_index_llm(
                 writer, run_id, settings=settings, pool=pool, llm=llm, progress=progress,
             )

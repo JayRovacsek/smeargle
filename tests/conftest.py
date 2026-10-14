@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from smeargle.observability import set_redaction
 from smeargle.oscal_build import facade
 
 
@@ -11,3 +12,9 @@ from smeargle.oscal_build import facade
 def _oscal_support(tmp_path_factory):
     support = tmp_path_factory.mktemp("oscal-support") / "oscal_support.db"
     facade.configure_support_file(support)
+
+
+@pytest.fixture(autouse=True)
+def _restore_redaction():
+    yield
+    set_redaction(True)
