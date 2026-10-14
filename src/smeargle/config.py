@@ -11,7 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class LlmSettings(BaseModel):
-    endpoint: Optional[str] = None
+    base_url: str = ""
     model: Optional[str] = None
     auth_file: Optional[Path] = None
     api_key_env: Optional[str] = None
@@ -22,7 +22,7 @@ class LlmSettings(BaseModel):
 
 
 class JevSettings(BaseModel):
-    endpoint: Optional[str] = None
+    base_url: str = ""
     model: Optional[str] = None
     auth_file: Optional[Path] = None
     api_key_env: Optional[str] = None

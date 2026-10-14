@@ -60,14 +60,14 @@ def root(
     force: bool = typer.Option(False, "--force", help="Start a new run."),
     verbose: bool = typer.Option(False, "--verbose", help="Verbose logging."),
     yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompts."),
-    llm_endpoint: Optional[str] = typer.Option(None, "--llm-endpoint"),
+    llm_base_url: Optional[str] = typer.Option(None, "--llm-base-url", help="Base URL for the LLM API (OpenAI-compatible)."),
     llm_model: Optional[str] = typer.Option(None, "--llm-model"),
     llm_auth_file: Optional[Path] = typer.Option(None, "--llm-auth-file"),
     llm_api_key_env: Optional[str] = typer.Option(None, "--llm-api-key-env"),
     llm_timeout: Optional[float] = typer.Option(None, "--llm-timeout"),
     llm_retries: Optional[int] = typer.Option(None, "--llm-retries"),
     llm_temperature: Optional[float] = typer.Option(None, "--llm-temperature"),
-    jev_endpoint: Optional[str] = typer.Option(None, "--jev-endpoint"),
+    jev_base_url: Optional[str] = typer.Option(None, "--jev-base-url", help="Base URL for the JEV API."),
     jev_model: Optional[str] = typer.Option(None, "--jev-model"),
     jev_auth_file: Optional[Path] = typer.Option(None, "--jev-auth-file"),
     jev_api_key_env: Optional[str] = typer.Option(None, "--jev-api-key-env"),
@@ -125,7 +125,7 @@ def root(
     llm_overrides = {
         key: value
         for key, value in {
-            "endpoint": llm_endpoint, "model": llm_model, "auth_file": llm_auth_file,
+            "base_url": llm_base_url, "model": llm_model, "auth_file": llm_auth_file,
             "api_key_env": llm_api_key_env, "timeout": llm_timeout, "retries": llm_retries,
             "temperature": llm_temperature,
         }.items()
@@ -136,7 +136,7 @@ def root(
     jev_overrides = {
         key: value
         for key, value in {
-            "endpoint": jev_endpoint, "model": jev_model, "auth_file": jev_auth_file,
+            "base_url": jev_base_url, "model": jev_model, "auth_file": jev_auth_file,
             "api_key_env": jev_api_key_env, "timeout": jev_timeout, "retries": jev_retries,
             "batch": jev_batch, "batch_size": jev_batch_size,
             "min_confidence": jev_min_confidence,
@@ -237,10 +237,10 @@ def run(
         raise UsageError("run requires at least one --catalog")
     if settings.output is None:
         raise UsageError("run requires --output")
-    if not settings.llm.endpoint:
-        raise UsageError("run requires --llm-endpoint")
-    if not settings.jev.endpoint:
-        raise UsageError("run requires --jev-endpoint")
+    if not settings.llm.base_url:
+        raise UsageError("run requires --llm-base-url")
+    if not settings.jev.base_url:
+        raise UsageError("run requires --jev-base-url")
 
     _configure_oscal(settings)
     fingerprint = run_pipeline.compute_fingerprint(input_paths, catalog_paths)
@@ -268,10 +268,10 @@ def extract(
         raise UsageError("extract requires at least one --input")
     if settings.output is None:
         raise UsageError("extract requires --output")
-    if not settings.llm.endpoint:
-        raise UsageError("extract requires --llm-endpoint")
-    if not settings.jev.endpoint:
-        raise UsageError("extract requires --jev-endpoint")
+    if not settings.llm.base_url:
+        raise UsageError("extract requires --llm-base-url")
+    if not settings.jev.base_url:
+        raise UsageError("extract requires --jev-base-url")
     _configure_oscal(settings)
     result = run_pipeline.run_extract_only(
         state_dir=settings.state_dir, output=settings.output, input_paths=input_paths,
@@ -297,10 +297,10 @@ def map(
         raise UsageError("map requires at least one --catalog")
     if settings.output is None:
         raise UsageError("map requires --output")
-    if not settings.llm.endpoint:
-        raise UsageError("map requires --llm-endpoint")
-    if not settings.jev.endpoint:
-        raise UsageError("map requires --jev-endpoint")
+    if not settings.llm.base_url:
+        raise UsageError("map requires --llm-base-url")
+    if not settings.jev.base_url:
+        raise UsageError("map requires --jev-base-url")
     _configure_oscal(settings)
     result = run_pipeline.run_map(
         state_dir=settings.state_dir, output=settings.output, catalog_paths=catalog_paths,
@@ -318,10 +318,10 @@ def resume(ctx: typer.Context) -> None:
         raise UsageError("resume requires --run-id")
     if settings.output is None:
         raise UsageError("resume requires --output")
-    if not settings.llm.endpoint:
-        raise UsageError("resume requires --llm-endpoint")
-    if not settings.jev.endpoint:
-        raise UsageError("resume requires --jev-endpoint")
+    if not settings.llm.base_url:
+        raise UsageError("resume requires --llm-base-url")
+    if not settings.jev.base_url:
+        raise UsageError("resume requires --jev-base-url")
     _configure_oscal(settings)
     result = run_pipeline.resume_run(
         state_dir=settings.state_dir, output=settings.output, settings=settings,

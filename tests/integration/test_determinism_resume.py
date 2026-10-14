@@ -22,9 +22,9 @@ def _settings(tmp_path):
     settings = Settings.load()
     settings.output = tmp_path / "out"
     settings.state_dir = tmp_path / "state"
-    settings.llm.endpoint = "https://llm.example"
+    settings.llm.base_url = "https://llm.example"
     settings.llm.model = "test-model"
-    settings.jev.endpoint = "https://jev.example"
+    settings.jev.base_url = "https://jev.example"
     settings.jev.model = "jev-model"
     return settings
 
@@ -79,7 +79,7 @@ def _mock_all(*, llm_calls=None, jev_calls=None):
             jev_calls["n"] += 1
         return httpx.Response(200, json=_answers("MUST", 0.9))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=chat_router)
     respx.post("https://jev.example/v1/systemone").mock(side_effect=jev_router)
 
 
@@ -101,7 +101,7 @@ def _mock_extraction_delays(delays):
             return httpx.Response(200, json=_chat(json.dumps({"domains": ["access"]})))
         return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=chat_router)
     respx.post("https://jev.example/v1/systemone").mock(
         side_effect=lambda request: httpx.Response(200, json=_answers("MUST", 0.9))
     )
@@ -178,7 +178,7 @@ def test_incomplete_chunk_stage_is_reissued_on_resume(tmp_path):
             return httpx.Response(200, json=_chat(json.dumps({"domains": []})))
         return httpx.Response(200, json=_chat(json.dumps({"requirements": [{"text": "MUST x", "keyword": "MUST"}]})))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=chat_router)
     respx.post("https://jev.example/v1/systemone").mock(
         side_effect=lambda request: httpx.Response(200, json=_answers("MUST", 0.9))
     )

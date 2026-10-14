@@ -20,9 +20,9 @@ def _settings(tmp_path):
     settings = Settings.load()
     settings.state_dir = tmp_path / "state"
     settings.output = tmp_path / "out"
-    settings.llm.endpoint = "https://llm.example"
+    settings.llm.base_url = "https://llm.example"
     settings.llm.model = "test-model"
-    settings.jev.endpoint = "https://jev.example"
+    settings.jev.base_url = "https://jev.example"
     settings.jev.model = "jev-model"
     return settings
 
@@ -67,7 +67,7 @@ def _mock_endpoints():
             return httpx.Response(200, json=_chat({"domains": ["access"]}))
         return httpx.Response(200, json=_chat({"control_ids": ["c-1.1"]}))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=llm)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=llm)
     respx.post("https://jev.example/v1/systemone").mock(side_effect=[
         httpx.Response(200, json=_answers("yes", 0.9)),
         httpx.Response(200, json=_answers("MUST", 0.9)),

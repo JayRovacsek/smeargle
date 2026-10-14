@@ -7,6 +7,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 
+import openai
+
 from smeargle.clients.http import build_client, load_bearer_token
 from smeargle.clients.jev import LayaJevClient
 from smeargle.clients.llm import OpenAiCompatibleLLM
@@ -251,27 +253,29 @@ def _assemble_out(writer, run_id, output, *, settings, clock, id_factory, config
 
 
 def _build_llm(settings: Settings, bus: EvidenceBus):
-    if not settings.llm.endpoint:
-        raise ServiceError("llm endpoint is not configured")
+    if not settings.llm.base_url:
+        raise ServiceError("llm base_url is not configured")
     token = load_bearer_token(auth_file=settings.llm.auth_file, api_key_env=settings.llm.api_key_env)
-    http = build_client(
-        base_url=settings.llm.endpoint, timeout=settings.llm.timeout, token=token,
-        max_connections=settings.execution.concurrency,
+    client = openai.OpenAI(
+        base_url=settings.llm.base_url,
+        api_key=token or "placeholder",
+        timeout=settings.llm.timeout,
+        max_retries=0,
     )
-    client = OpenAiCompatibleLLM(
-        http, model=settings.llm.model or "default", retries=settings.llm.retries,
+    llm = OpenAiCompatibleLLM(
+        client, model=settings.llm.model or "default", retries=settings.llm.retries,
         temperature=settings.llm.temperature, structured_output=settings.llm.structured_output,
         recorder=bus,
     )
-    return http, client
+    return client, llm
 
 
 def _build_jev(settings: Settings, bus: EvidenceBus):
-    if not settings.jev.endpoint:
-        raise ServiceError("jev endpoint is not configured")
+    if not settings.jev.base_url:
+        raise ServiceError("jev base_url is not configured")
     token = load_bearer_token(auth_file=settings.jev.auth_file, api_key_env=settings.jev.api_key_env)
     http = build_client(
-        base_url=settings.jev.endpoint, timeout=settings.jev.timeout, token=token,
+        base_url=settings.jev.base_url, timeout=settings.jev.timeout, token=token,
         max_connections=settings.execution.concurrency,
     )
     client = LayaJevClient(
@@ -755,7 +759,8 @@ def run_pipeline(
         raise
     finally:
         if llm_http is not None:
-            llm_http.close()
+            if hasattr(llm_http, 'close'):
+                llm_http.close()
         if jev_http is not None:
             jev_http.close()
         writer.stop()
@@ -821,7 +826,8 @@ def run_extract_only(
         counts = writer.call(lambda store: store.counts(selected))
     finally:
         if llm_http is not None:
-            llm_http.close()
+            if hasattr(llm_http, 'close'):
+                llm_http.close()
         if jev_http is not None:
             jev_http.close()
         writer.stop()
@@ -892,7 +898,8 @@ def run_map(
         counts = writer.call(lambda store: store.counts(run_id))
     finally:
         if llm_http is not None:
-            llm_http.close()
+            if hasattr(llm_http, 'close'):
+                llm_http.close()
         if jev_http is not None:
             jev_http.close()
         writer.stop()

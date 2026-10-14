@@ -8,9 +8,9 @@ def _build(**overrides):
 
 
 def test_run_block_carries_identity_and_redacted_config():
-    document = _build(run=run_block(config={"llm": {"endpoint": "https://llm"}}))
+    document = _build(run=run_block(config={"llm": {"base_url": "https://llm"}}))
     assert document["run"]["run_id"] == "run-1"
-    assert document["run"]["config"]["llm"]["endpoint"] == "https://llm"
+    assert document["run"]["config"]["llm"]["base_url"] == "https://llm"
     assert document["summary"]["generated_at"] == "2026-01-01T00:00:00Z"
 
 

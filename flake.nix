@@ -48,16 +48,17 @@
                 || pkgs.lib.hasPrefix "tests/" rel;
             };
             build-system = [ py.setuptools ];
-            dependencies = with py; [
-              typer
-              pydantic
-              pydantic-settings
-              httpx
-              pyyaml
-              oscal
-              pypdf
-              python-docx
-            ];
+dependencies = with py; [
+  typer
+  pydantic
+  pydantic-settings
+  httpx
+  pyyaml
+  oscal
+  pypdf
+  python-docx
+  openai
+];
             nativeCheckInputs = [
               py.pytestCheckHook
               py.jsonschema-rs
@@ -77,20 +78,21 @@
           };
 
           devShells.default = pkgs.mkShell {
-            packages = [
-              (pkgs.python3.withPackages (ps: [
-                ps.typer
-                ps.pydantic
-                ps.pydantic-settings
-                ps.httpx
-                ps.pyyaml
-                ps.oscal
-                ps.pypdf
-                ps.python-docx
-                ps.jsonschema-rs
-                ps.pytest
-                ps.respx
-              ]))
+packages = [
+  (pkgs.python3.withPackages (ps: [
+    ps.typer
+    ps.pydantic
+    ps.pydantic-settings
+    ps.httpx
+    ps.pyyaml
+    ps.oscal
+    ps.pypdf
+    ps.python-docx
+    ps.jsonschema-rs
+    ps.pytest
+    ps.respx
+    ps.openai
+  ]))
               py.ruff
               py.mypy
             ];

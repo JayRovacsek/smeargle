@@ -1,17 +1,17 @@
 import json
 
 import httpx
+import openai
 import pytest
 import respx
 from fakes.clients import RecordingRecorder
 
 from smeargle.clients import dto as wire
-from smeargle.clients.http import build_client
 from smeargle.clients.llm import OpenAiCompatibleLLM, extract_first_json_object
 from smeargle.clients.ports import CallMeta
 from smeargle.errors import ServiceError
 
-URL = "https://llm.example/v1/chat/completions"
+URL = "https://llm.example/chat/completions"
 
 
 def _chat(content: str) -> dict:
@@ -20,7 +20,7 @@ def _chat(content: str) -> dict:
 
 def _client(**kwargs):
     return OpenAiCompatibleLLM(
-        build_client(base_url="https://llm.example", timeout=5.0),
+        openai.OpenAI(base_url="https://llm.example", api_key="sk-test", max_retries=0),
         model="test-model",
         **kwargs,
     )

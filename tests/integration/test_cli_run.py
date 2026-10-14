@@ -49,7 +49,7 @@ def test_run_persists_and_status_reports_stages(tmp_path, capsys):
             return httpx.Response(200, json=_chat(json.dumps({"domains": ["access"]})))
         return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=chat_router)
     respx.post("https://jev.example/v1/systemone").mock(
         side_effect=[
             httpx.Response(200, json=_answers("yes", 0.9)),
@@ -63,8 +63,8 @@ def test_run_persists_and_status_reports_stages(tmp_path, capsys):
     code = main(
         [
             "--state-dir", str(state), "--output", str(output), "--yes",
-            "--llm-endpoint", "https://llm.example",
-            "--jev-endpoint", "https://jev.example",
+            "--llm-base-url", "https://llm.example",
+            "--jev-base-url", "https://jev.example",
             "run", "-i", str(document), "-c", str(catalog),
         ]
     )
@@ -78,7 +78,7 @@ def test_run_persists_and_status_reports_stages(tmp_path, capsys):
     assert "classify" in out
 
 
-def test_run_requires_endpoints(tmp_path):
+def test_run_requires_base_urls(tmp_path):
     document, catalog = _fixtures(tmp_path)
     code = main(
         [

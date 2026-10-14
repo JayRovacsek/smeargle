@@ -46,7 +46,7 @@ def _mock():
             return httpx.Response(200, json=_chat({"domains": ["access"]}))
         return httpx.Response(200, json=_chat({"control_ids": ["c-1.1"]}))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=llm)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=llm)
     respx.post("https://jev.example/v1/systemone").mock(side_effect=[
         httpx.Response(200, json=_answers("yes", 0.9)),
         httpx.Response(200, json=_answers("MUST", 0.9)),
@@ -58,7 +58,7 @@ def _mock():
 def _common(tmp_path):
     return [
         "--state-dir", str(tmp_path / "s"), "--output", str(tmp_path / "o"), "--yes",
-        "--llm-endpoint", "https://llm.example", "--jev-endpoint", "https://jev.example",
+        "--llm-base-url", "https://llm.example", "--jev-base-url", "https://jev.example",
     ]
 
 
@@ -107,7 +107,7 @@ def test_run_exits_six_when_a_requirement_is_unmapped(tmp_path):
             return httpx.Response(200, json=_chat({"domains": []}))
         return httpx.Response(200, json=_chat({"control_ids": []}))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=llm)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=llm)
     respx.post("https://jev.example/v1/systemone").mock(
         side_effect=[httpx.Response(200, json=_answers("yes", 0.9)),
                      httpx.Response(200, json=_answers("MUST", 0.9))]
@@ -125,7 +125,7 @@ def test_force_and_run_id_are_accepted_options(tmp_path, capsys):
         "run", "-i", str(document), "-c", str(catalog),
     ])
     assert code == 2
-    assert "--llm-endpoint" in capsys.readouterr().err
+    assert "--llm-base-url" in capsys.readouterr().err
 
 
 @respx.mock

@@ -68,7 +68,7 @@ def test_phase2_run_ingests_and_emits_valid_catalog(tmp_path):
             return httpx.Response(200, json=_chat(json.dumps({"domains": ["access"]})))
         return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=chat_router)
     respx.post("https://jev.example/v1/systemone").mock(
         side_effect=[
             httpx.Response(200, json=_answers("yes", 0.9)),
@@ -85,9 +85,9 @@ def test_phase2_run_ingests_and_emits_valid_catalog(tmp_path):
             "--output",
             str(output),
             "--yes",
-            "--llm-endpoint",
+            "--llm-base-url",
             "https://llm.example",
-            "--jev-endpoint",
+            "--jev-base-url",
             "https://jev.example",
             "run",
             "-i",

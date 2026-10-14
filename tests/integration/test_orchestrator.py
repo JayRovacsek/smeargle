@@ -17,9 +17,9 @@ def _settings(tmp_path, **overrides):
     settings = Settings.load(overrides=overrides)
     settings.output = tmp_path / "out"
     settings.state_dir = tmp_path / "state"
-    settings.llm.endpoint = "https://llm.example"
+    settings.llm.base_url = "https://llm.example"
     settings.llm.model = "test-model"
-    settings.jev.endpoint = "https://jev.example"
+    settings.jev.base_url = "https://jev.example"
     settings.jev.model = "jev-model"
     return settings
 
@@ -107,7 +107,7 @@ def test_full_pipeline_persists_requirements_pairs_and_mappings(tmp_path):
             return httpx.Response(200, json=_chat(json.dumps({"domains": ["access"]})))
         return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=chat_router)
     respx.post("https://jev.example/v1/systemone").mock(
         side_effect=[
             httpx.Response(200, json=_answers(("yes", 0.9))),
@@ -141,7 +141,7 @@ def test_no_candidates_marks_requirement_none_terminal(tmp_path):
             return httpx.Response(200, json=_chat(json.dumps({"labels": []})))
         return httpx.Response(200, json=_chat(json.dumps({"domains": []})))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=chat_router)
     respx.post("https://jev.example/v1/systemone").mock(side_effect=_jev_router)
     _run(tmp_path, settings, document, catalog)
     with RunStore.open(settings.state_dir) as store:
@@ -153,7 +153,7 @@ def test_no_candidates_marks_requirement_none_terminal(tmp_path):
 def test_fatal_auth_failure_aborts_run(tmp_path):
     settings = _settings(tmp_path)
     document, catalog = _fixtures(tmp_path)
-    respx.post("https://llm.example/v1/chat/completions").mock(
+    respx.post("https://llm.example/chat/completions").mock(
         return_value=httpx.Response(401, json={"error": "denied"})
     )
     respx.post("https://jev.example/v1/systemone").mock(return_value=httpx.Response(200, json=_answers(("yes", 0.9))))
@@ -165,7 +165,7 @@ def test_fatal_auth_failure_aborts_run(tmp_path):
 def test_fatal_abort_stamps_stage_and_run_failure(tmp_path):
     settings = _settings(tmp_path)
     document, catalog = _fixtures(tmp_path)
-    respx.post("https://llm.example/v1/chat/completions").mock(
+    respx.post("https://llm.example/chat/completions").mock(
         return_value=httpx.Response(401, json={"error": "denied"})
     )
     respx.post("https://jev.example/v1/systemone").mock(
@@ -193,7 +193,7 @@ def test_classification_unmapped_records_no_mapping(tmp_path):
             return httpx.Response(200, json=_chat(json.dumps({"domains": ["access"]})))
         return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=chat_router)
     respx.post("https://jev.example/v1/systemone").mock(
         side_effect=[
             httpx.Response(200, json=_answers(("yes", 0.9))),
@@ -227,7 +227,7 @@ def test_resume_skips_completed_work(tmp_path):
             return httpx.Response(200, json=_chat(json.dumps({"domains": ["access"]})))
         return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=chat_router)
     respx.post("https://jev.example/v1/systemone").mock(
         side_effect=[
             httpx.Response(200, json=_answers(("yes", 0.9))),
@@ -268,7 +268,7 @@ def test_incomplete_index_defers_retrieval_until_resumed(tmp_path):
             return httpx.Response(200, json=_answers(("MUST", 0.9)))
         return httpx.Response(200, json=_answers(("subset-of", 0.85)))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=chat_router)
     respx.post("https://jev.example/v1/systemone").mock(side_effect=jev_router)
 
     _run(tmp_path, settings, document, catalog)
@@ -317,7 +317,7 @@ def test_partial_extract_resume_does_not_duplicate_ordinals(tmp_path):
             return httpx.Response(200, json=_chat(json.dumps({"domains": []})))
         return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=chat_router)
     respx.post("https://jev.example/v1/systemone").mock(side_effect=_jev_router)
 
     _run(tmp_path, settings, document, catalog)
@@ -351,7 +351,7 @@ def test_per_item_extract_failure_persists_attempt_trace(tmp_path):
             return httpx.Response(200, json=_chat(json.dumps({"domains": []})))
         return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=chat_router)
     respx.post("https://jev.example/v1/systemone").mock(side_effect=_jev_router)
 
     _run(tmp_path, settings, document, catalog)
@@ -384,7 +384,7 @@ def _mock_pipeline():
             return httpx.Response(200, json=_answers(("MUST", 0.9)))
         return httpx.Response(200, json=_answers(("subset-of", 0.85)))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=chat_router)
     respx.post("https://jev.example/v1/systemone").mock(side_effect=jev_router)
 
 
@@ -478,7 +478,7 @@ def test_jev_batching_issues_one_batch_call_for_verification_and_classification(
             return httpx.Response(200, json=_chat(json.dumps({"domains": ["access"]})))
         return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
 
-    respx.post("https://llm.example/v1/chat/completions").mock(side_effect=chat_router)
+    respx.post("https://llm.example/chat/completions").mock(side_effect=chat_router)
     batch = respx.post("https://jev.example/v1/systemone/batch").mock(
         side_effect=[
             httpx.Response(200, json={"results": [[

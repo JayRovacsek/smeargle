@@ -26,7 +26,7 @@ def test_extract_and_map_require_configuration(capsys):
 def test_help_lists_pipeline_options(capsys):
     main(["--help"])
     out = capsys.readouterr().out
-    for option in ("--llm-endpoint", "--jev-endpoint", "--mapped-threshold", "--concurrency"):
+    for option in ("--llm-base-url", "--jev-base-url", "--mapped-threshold", "--concurrency"):
         assert option in out
 
 
@@ -38,30 +38,30 @@ def _minimal_inputs(tmp_path):
     return document, catalog
 
 
-def test_run_requires_llm_endpoint(tmp_path, capsys):
+def test_run_requires_llm_base_url(tmp_path, capsys):
     document, catalog = _minimal_inputs(tmp_path)
     code = main(
         [
             "--state-dir", str(tmp_path / "s"), "--output", str(tmp_path / "o"),
-            "--jev-endpoint", "https://jev.example",
+            "--jev-base-url", "https://jev.example",
             "run", "-i", str(document), "-c", str(catalog),
         ]
     )
     assert code == 2
-    assert "--llm-endpoint" in capsys.readouterr().err
+    assert "--llm-base-url" in capsys.readouterr().err
 
 
-def test_run_requires_jev_endpoint(tmp_path, capsys):
+def test_run_requires_jev_base_url(tmp_path, capsys):
     document, catalog = _minimal_inputs(tmp_path)
     code = main(
         [
             "--state-dir", str(tmp_path / "s"), "--output", str(tmp_path / "o"),
-            "--llm-endpoint", "https://llm.example",
+            "--llm-base-url", "https://llm.example",
             "run", "-i", str(document), "-c", str(catalog),
         ]
     )
     assert code == 2
-    assert "--jev-endpoint" in capsys.readouterr().err
+    assert "--jev-base-url" in capsys.readouterr().err
 
 
 def test_unknown_option_is_usage_error():
@@ -135,9 +135,9 @@ def test_run_missing_input_returns_input_exit_code(tmp_path):
             str(tmp_path / "state"),
             "--output",
             str(tmp_path / "out"),
-            "--llm-endpoint",
+            "--llm-base-url",
             "https://llm.example",
-            "--jev-endpoint",
+            "--jev-base-url",
             "https://jev.example",
             "run",
             "-c",
@@ -177,8 +177,8 @@ def _phase4_settings(tmp_path):
     settings = Settings.load()
     settings.state_dir = tmp_path / "state"
     settings.output = tmp_path / "out"
-    settings.llm.endpoint = "https://llm.example"
-    settings.jev.endpoint = "https://jev.example"
+    settings.llm.base_url = "https://llm.example"
+    settings.jev.base_url = "https://jev.example"
     return settings
 
 
@@ -209,4 +209,4 @@ def test_nomination_cap_option_is_accepted(tmp_path, capsys):
         ]
     )
     assert code == 2
-    assert "--llm-endpoint" in capsys.readouterr().err
+    assert "--llm-base-url" in capsys.readouterr().err

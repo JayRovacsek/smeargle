@@ -34,7 +34,7 @@ def _invoke(tmp_path, document, catalog, llm, jev, run_id):
         [
             _binary(), "--state-dir", str(tmp_path / "state"),
             "--output", str(tmp_path / "out"), "--yes", "--run-id", run_id,
-            "--llm-endpoint", llm.url, "--jev-endpoint", jev.url,
+            "--llm-base-url", llm.url, "--jev-base-url", jev.url,
             "run", "-i", str(document), "-c", str(catalog),
         ],
         capture_output=True, text=True, env=os.environ.copy(), timeout=120,
