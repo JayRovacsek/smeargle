@@ -22,14 +22,33 @@ tmp/
 
 # Tooling
 .direnv
+.envrc
 .pre-commit-config.yaml
 
 # OpenCode session exports (must not enter git history)
 sesh.txt
 session-*.md
 
+# Secrets (LLM/JEV auth token files) — must never enter git history, at any depth
+.secrets/
+
 # smeargle run state (checkpoints/evidence)
 /.smeargle/
 
-# Sample/example catalogs (must not enter git history)
+# smeargle emitted run outputs (artifacts + evidence exports)
+/out/
+/nist-rfm-out/
+/pci-out/
+/csa-ccm-out/
+
+# Sample/example inputs and catalogs (must not enter git history)
 pci-dss-4.json
+ISM_catalog.json
+NIST-AI-RMF-Playbook-2023.json
+NIST_SP-800-53_rev5_catalog.json
+csa-ccm-301.json
+example-policy.md
+
+# Agent workflow files (planning/task state; root only)
+/state.md
+/task.md
