@@ -29,9 +29,7 @@ def test_duplicate_json_keys_are_rejected():
 
 def test_out_of_range_probability_is_rejected():
     with pytest.raises(ValidationError):
-        dto.JevAnswerModel.model_validate(
-            {"answer": "yes", "answer_confidence": 1.5}
-        )
+        dto.JevNoulAnswerModel.model_validate({"type": "noul", "noul": 1.5})
 
 
 def test_jev_response_converts_to_domain_values():

@@ -9,12 +9,8 @@ from typing import Any, Optional, Sequence
 import httpx
 
 from smeargle.clients.dto import (
-    JevBatchRequestModel,
-    JevBatchResponseModel,
     JevSystemOneResponseModel,
-    jev_result_to_domain,
     question_to_keyed_wire,
-    question_to_wire,
     single_result_to_domain,
 )
 from smeargle.clients.ports import CallMeta, CallRecorder
@@ -67,35 +63,41 @@ class LayaJevClient:
         parsed = JevSystemOneResponseModel.model_validate(self._safe_json(response))
         return single_result_to_domain(questions, parsed.answers)
 
-    # The reference server does not implement /v1/systemone/batch; this wire
-    # shape follows the spec and remains unverified against a live endpoint.
+    # The reference Laya server exposes batching at /v1/decide/batch with a
+    # shared-questions body: every state is evaluated against the same
+    # questions, and each result element carries the same shape as a single
+    # systemone response (server.cpp handle_request batch branch).
     def systemone_batch(
         self,
         states: Sequence[str],
-        questions: Sequence[Sequence[JevQuestion]],
+        questions: Sequence[JevQuestion],
         *,
         meta: Optional[CallMeta] = None,
     ) -> list[JevResult]:
-        pairs = list(zip(states, questions))
         if not self._batch:
-            return [self.systemone(state, qs, meta=meta) for state, qs in pairs]
+            return [self.systemone(state, questions, meta=meta) for state in states]
         results: list[JevResult] = []
-        for group in _batches(pairs, self._batch_size):
-            payload = JevBatchRequestModel(
-                model=self._model,
-                states=[state for state, _qs in group],
-                questions=[[question_to_wire(q) for q in qs] for _state, qs in group],
-                min_confidence=self._min_confidence,
-            ).model_dump(exclude_none=True)
-            response = self._post("/v1/systemone/batch", payload, meta)
-            parsed = JevBatchResponseModel.model_validate(self._safe_json(response))
-            if len(parsed.results) != len(group):
+        keyed = {f"q{i}": question_to_keyed_wire(q) for i, q in enumerate(questions)}
+        for group in _batches(list(states), self._batch_size):
+            payload: dict[str, Any] = {
+                "model": self._model,
+                "states": group,
+                "questions": keyed,
+            }
+            response = self._post("/v1/decide/batch", payload, meta)
+            body = self._safe_json(response)
+            if not isinstance(body, dict) or "results" not in body:
+                raise ServiceError("JEV batch response is missing results")
+            parsed = [
+                JevSystemOneResponseModel.model_validate(element) for element in body["results"]
+            ]
+            if len(parsed) != len(group):
                 raise ServiceError(
-                    f"JEV batch returned {len(parsed.results)} result(s) "
+                    f"JEV batch returned {len(parsed)} result(s) "
                     f"for {len(group)} submitted state(s)"
                 )
-            for (_state, qs), answers in zip(group, parsed.results):
-                results.append(jev_result_to_domain(qs[0], answers))
+            for element in parsed:
+                results.append(single_result_to_domain(questions, element.answers))
         return results
 
     def _post(

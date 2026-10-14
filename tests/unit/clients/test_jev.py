@@ -11,13 +11,6 @@ from smeargle.domain.jev import JevQuestion
 from smeargle.errors import ServiceError
 
 
-def _answer(answer: str, confidence: float, entropy: float | None = None) -> dict:
-    payload = {"question": "q", "answer": answer, "answer_confidence": confidence}
-    if entropy is not None:
-        payload["confidence"] = entropy
-    return payload
-
-
 def _noul(confidence: float) -> dict:
     return {"type": "noul", "action": {"act_probability": 1}, "confidence": confidence, "noul": confidence}
 
@@ -42,6 +35,7 @@ def test_systemone_noul_probability_is_answer_confidence():
     body = json.loads(route.calls[0].request.content)
     assert body["model"] == "jev-1"
     assert body["questions"]["q0"]["type"] == "noul"
+    assert body["questions"]["q0"]["instructions"] == "Is this genuine?"
 
 
 @respx.mock
@@ -62,29 +56,42 @@ def test_choice_sends_options_and_records_entropy_separately():
 
 
 @respx.mock
-def test_systemone_batch_maps_results_positionally():
+def test_systemone_batch_maps_results_to_states():
+    probabilities = {"a": 0.9, "b": 0.1, "c": 0.7}
+
     def handler(request):
-        states = json.loads(request.content)["states"]
+        body = json.loads(request.content)
+        assert body["questions"] == {"q0": {"type": "noul", "instructions": "q?"}}
         return httpx.Response(
-            200, json={"results": [[_answer(f"for-{state}", 0.5)] for state in states]}
+            200, json={"results": [
+                {"answers": {"q0": _noul(probabilities[state])}} for state in body["states"]
+            ]}
         )
 
-    respx.post("https://jev.example/v1/systemone/batch").mock(side_effect=handler)
+    respx.post("https://jev.example/v1/decide/batch").mock(side_effect=handler)
     question = JevQuestion(question="q?", kind="noul")
-    results = _client(retries=0, batch=True).systemone_batch(
-        ["a", "b", "c"], [[question], [question], [question]]
-    )
-    assert [r.answers[0].answer for r in results] == ["for-a", "for-b", "for-c"]
+    results = _client(retries=0, batch=True).systemone_batch(["a", "b", "c"], [question])
+    assert [r.answers[0].answer for r in results] == ["yes", "no", "yes"]
 
 
 @respx.mock
 def test_batch_short_result_array_raises_service_error():
-    respx.post("https://jev.example/v1/systemone/batch").mock(
-        return_value=httpx.Response(200, json={"results": [[_answer("only-one", 0.5)]]})
+    respx.post("https://jev.example/v1/decide/batch").mock(
+        return_value=httpx.Response(200, json={"results": [{"answers": {"q0": _noul(0.5)}}]})
     )
     question = JevQuestion(question="q?", kind="noul")
     with pytest.raises(ServiceError):
-        _client(retries=0, batch=True).systemone_batch(["a", "b"], [[question], [question]])
+        _client(retries=0, batch=True).systemone_batch(["a", "b"], [question])
+
+
+@respx.mock
+def test_batch_non_object_body_raises_service_error():
+    respx.post("https://jev.example/v1/decide/batch").mock(
+        return_value=httpx.Response(200, text="gateway noise")
+    )
+    question = JevQuestion(question="q?", kind="noul")
+    with pytest.raises(ServiceError, match="missing results"):
+        _client(retries=0, batch=True).systemone_batch(["a"], [question])
 
 
 @respx.mock
@@ -93,23 +100,23 @@ def test_batch_disabled_falls_back_to_sequential_calls():
         return_value=httpx.Response(200, json={"answers": {"q0": _noul(0.9)}})
     )
     question = JevQuestion(question="q?", kind="noul")
-    _client(retries=0, batch=False).systemone_batch(["a", "b"], [[question], [question]])
+    _client(retries=0, batch=False).systemone_batch(["a", "b"], [question])
     assert route.call_count == 2
 
 
 @respx.mock
-def test_min_confidence_is_sent_and_batch_size_clamps_to_64():
-    route = respx.post("https://jev.example/v1/systemone/batch").mock(
+def test_batch_size_clamps_to_64_and_omits_min_confidence():
+    route = respx.post("https://jev.example/v1/decide/batch").mock(
         side_effect=lambda request: httpx.Response(
-            200, json={"results": [[_answer("yes", 0.9)] for _ in json.loads(request.content)["states"]]}
+            200, json={"results": [
+                {"answers": {"q0": _noul(0.9)}} for _ in json.loads(request.content)["states"]
+            ]}
         )
     )
     question = JevQuestion(question="q?", kind="noul")
     client = _client(retries=0, batch=True, batch_size=64, min_confidence=0.4)
-    client.systemone_batch(
-        [str(i) for i in range(70)], [[question] for _ in range(70)]
-    )
+    client.systemone_batch([str(i) for i in range(70)], [question])
     assert route.call_count == 2
     first = json.loads(route.calls[0].request.content)
     assert len(first["states"]) == 64
-    assert first["min_confidence"] == 0.4
+    assert "min_confidence" not in first

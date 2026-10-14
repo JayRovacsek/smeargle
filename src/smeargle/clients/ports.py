@@ -60,7 +60,7 @@ class JevClient(Protocol):
     def systemone_batch(
         self,
         states: Sequence[str],
-        questions: Sequence[Sequence[JevQuestion]],
+        questions: Sequence[JevQuestion],
         *,
         meta: Optional[CallMeta] = None,
     ) -> list[JevResult]: ...

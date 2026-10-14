@@ -479,12 +479,10 @@ def test_jev_batching_issues_one_batch_call_for_verification_and_classification(
         return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
 
     respx.post("https://llm.example/chat/completions").mock(side_effect=chat_router)
-    batch = respx.post("https://jev.example/v1/systemone/batch").mock(
+    batch = respx.post("https://jev.example/v1/decide/batch").mock(
         side_effect=[
-            httpx.Response(200, json={"results": [[
-                {"question": "q", "answer": "yes", "answer_confidence": 0.9}]]}),
-            httpx.Response(200, json={"results": [[
-                {"question": "q", "answer": "subset-of", "answer_confidence": 0.85}]]}),
+            httpx.Response(200, json={"results": [_answers(("yes", 0.9))]}),
+            httpx.Response(200, json={"results": [_answers(("subset-of", 0.85))]}),
         ]
     )
     respx.post("https://jev.example/v1/systemone").mock(

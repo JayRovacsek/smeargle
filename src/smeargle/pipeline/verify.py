@@ -58,7 +58,7 @@ def verify_batch(
     meta: Optional[CallMeta] = None,
 ) -> list[VerifyOutcome]:
     states = [relation_state(requirement, control) for _pair_id, requirement, control in items]
-    questions = [[noul_question()] for _ in items]
+    questions = [noul_question()]
     return [
         outcome_for(
             result.answers[0].answer_confidence if result.answers else 0.0,

@@ -55,6 +55,4 @@ class FakeJevClient:
         return result
 
     def systemone_batch(self, states, questions, *, meta=None):
-        return [
-            self.systemone(state, qs, meta=meta) for state, qs in zip(states, questions)
-        ]
+        return [self.systemone(state, questions, meta=meta) for state in states]

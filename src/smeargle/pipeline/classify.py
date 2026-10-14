@@ -75,7 +75,7 @@ def classify_batch(
     meta: Optional[CallMeta] = None,
 ) -> list[ClassifyOutcome]:
     states = [relation_state(requirement, control) for _pair_id, requirement, control in items]
-    questions = [[choice_question()] for _ in items]
+    questions = [choice_question()]
     return [
         outcome_for(result.answers[0] if result.answers else None, min_confidence=min_confidence)
         for result in jev.systemone_batch(states, questions, meta=meta)
