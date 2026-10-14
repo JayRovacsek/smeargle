@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Optional, Sequence
 
@@ -22,6 +23,8 @@ from smeargle.domain.jev import JevQuestion, JevResult
 from smeargle.errors import FatalServiceError, ServiceError
 
 _BATCH_LIMIT = 64
+
+_logger = logging.getLogger(__name__)
 
 
 def _batches(items: list[Any], size: int) -> list[list[Any]]:
@@ -100,6 +103,9 @@ class LayaJevClient:
     ) -> httpx.Response:
         if self._recorder is not None and meta is None:
             meta = CallMeta(stage="", item_ref="", call_type="")
+        stage = meta.stage if meta is not None else "jev"
+        item_ref = meta.item_ref if meta is not None else "-"
+        call_type = meta.call_type if meta is not None else "jev"
         if self._recorder is not None and meta is not None:
             self._recorder.request(
                 stage=meta.stage, item_ref=meta.item_ref, call_type=meta.call_type,
@@ -111,6 +117,17 @@ class LayaJevClient:
         def on_attempt(attempt: Attempt) -> None:
             nonlocal last_attempt
             last_attempt = attempt
+            if attempt.attempt_no > 1 or attempt.error_class is not None:
+                _logger.warning(
+                    "jev retry %s %s attempt %s",
+                    call_type, item_ref, attempt.attempt_no,
+                    extra={"smeargle": {
+                        "stage": stage, "item_ref": item_ref, "call_type": call_type,
+                        "model": self._model, "attempt_no": attempt.attempt_no,
+                        "http_status": attempt.http_status,
+                        "error_class": attempt.error_class,
+                    }},
+                )
             if self._recorder is not None and meta is not None:
                 self._recorder.attempt(
                     stage=meta.stage, item_ref=meta.item_ref, call_type=meta.call_type,
@@ -119,11 +136,24 @@ class LayaJevClient:
                     duration_ms=int((time.perf_counter() - start) * 1000),
                 )
 
-        response = request_with_retry(
-            lambda: self._client.post(path, json=payload),
-            policy=self._policy,
-            on_attempt=on_attempt,
-        )
+        try:
+            response = request_with_retry(
+                lambda: self._client.post(path, json=payload),
+                policy=self._policy,
+                on_attempt=on_attempt,
+            )
+        except ServiceError as exc:
+            _logger.error(
+                "jev %s %s failed: %s", call_type, item_ref, exc,
+                extra={"smeargle": {
+                    "stage": stage, "item_ref": item_ref, "call_type": call_type,
+                    "model": self._model, "error_class": type(exc).__name__,
+                    "attempt_no": last_attempt.attempt_no if last_attempt else None,
+                    "duration_ms": int((time.perf_counter() - start) * 1000),
+                }},
+            )
+            raise
+        duration_ms = int((time.perf_counter() - start) * 1000)
         if self._recorder is not None and meta is not None:
             self._recorder.response(
                 stage=meta.stage, item_ref=meta.item_ref, call_type=meta.call_type,
@@ -133,9 +163,36 @@ class LayaJevClient:
                 prompt_hash=meta.prompt_hash,
             )
         if response.status_code in (401, 403):
+            _logger.error(
+                "jev %s %s failed: HTTP %s", call_type, item_ref, response.status_code,
+                extra={"smeargle": {
+                    "stage": stage, "item_ref": item_ref, "call_type": call_type,
+                    "model": self._model, "http_status": response.status_code,
+                    "attempt_no": last_attempt.attempt_no if last_attempt else None,
+                    "duration_ms": duration_ms,
+                }},
+            )
             raise FatalServiceError(f"JEV authentication rejected: HTTP {response.status_code}")
         if response.status_code >= 400:
+            _logger.error(
+                "jev %s %s failed: HTTP %s", call_type, item_ref, response.status_code,
+                extra={"smeargle": {
+                    "stage": stage, "item_ref": item_ref, "call_type": call_type,
+                    "model": self._model, "http_status": response.status_code,
+                    "attempt_no": last_attempt.attempt_no if last_attempt else None,
+                    "duration_ms": duration_ms,
+                }},
+            )
             raise ServiceError(f"JEV returned HTTP {response.status_code}")
+        _logger.info(
+            "jev %s %s ok (%sms)", call_type, item_ref, duration_ms,
+            extra={"smeargle": {
+                "stage": stage, "item_ref": item_ref, "call_type": call_type,
+                "model": self._model, "http_status": response.status_code,
+                "attempt_no": last_attempt.attempt_no if last_attempt else None,
+                "duration_ms": duration_ms,
+            }},
+        )
         return response
 
     @staticmethod

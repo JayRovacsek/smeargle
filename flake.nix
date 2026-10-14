@@ -58,6 +58,7 @@ dependencies = with py; [
   pypdf
   python-docx
   openai
+  rich
 ];
             nativeCheckInputs = [
               py.pytestCheckHook
@@ -92,6 +93,7 @@ packages = [
     ps.pytest
     ps.respx
     ps.openai
+    ps.rich
   ]))
               py.ruff
               py.mypy

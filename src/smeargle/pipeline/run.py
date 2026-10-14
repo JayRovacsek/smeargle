@@ -5,7 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, Sequence
 
 import openai
 
@@ -14,6 +14,7 @@ from smeargle.clients.jev import LayaJevClient
 from smeargle.clients.llm import OpenAiCompatibleLLM
 from smeargle.clients.ports import CallMeta
 from smeargle.config import Settings
+from smeargle.console import stage_task
 from smeargle.domain.clock import Clock
 from smeargle.domain.ids import (
     IdFactory,
@@ -58,6 +59,9 @@ from smeargle.prompts import (
     retrieval as retrieval_prompt,
 )
 from smeargle.store.run_store import RunStore
+
+if TYPE_CHECKING:
+    from rich.progress import Progress
 
 _SECRET_SCOPED_KEYS = {"run_id", "force", "yes", "verbose"}
 
@@ -166,6 +170,7 @@ def _fan_out(
     jobs: list[tuple[Any, Any]],
     *,
     on_error: Optional[Callable[[Any, BaseException], None]] = None,
+    on_done: Optional[Callable[[], None]] = None,
 ) -> list[tuple[Any, Any, Optional[BaseException]]]:
     futures = {pool.submit(fn): key for key, fn in jobs}
     results: list[tuple[Any, Any, Optional[BaseException]]] = []
@@ -179,6 +184,8 @@ def _fan_out(
             if on_error is not None:
                 on_error(key, error)
             results.append((key, None, error))
+        if on_done is not None:
+            on_done()
     return results
 
 
@@ -288,7 +295,7 @@ def _build_jev(settings: Settings, bus: EvidenceBus):
 
 def run_extract(
     writer: Writer, run_id: str, *, settings: Settings, pool: ThreadPoolExecutor,
-    llm, jev,
+    llm, jev, progress: Optional["Progress"] = None,
 ) -> int:
     failures = 0
     writer.call(lambda store: work.claim_stage(store, run_id, "extract"))
@@ -322,7 +329,10 @@ def run_extract(
 
     proposals: list[tuple[Any, str, Requirement]] = []
     completed: list[Any] = []
-    chunk_results = _fan_out(pool, jobs, on_error=_attempt_recorder(writer, run_id, metas))
+    chunk_results = _fan_out(
+        pool, jobs, on_error=_attempt_recorder(writer, run_id, metas),
+        on_done=stage_task(progress, "extract", len(jobs)),
+    )
     failures += _record_failures(writer, run_id, "extract", "llm_extract", chunk_results)
     for key, outcome, error in chunk_results:
         if error is not None:
@@ -379,7 +389,10 @@ def run_extract(
                 ),
             )
         )
-    gate_results = _fan_out(pool, gate_jobs, on_error=_attempt_recorder(writer, run_id, gate_metas))
+    gate_results = _fan_out(
+        pool, gate_jobs, on_error=_attempt_recorder(writer, run_id, gate_metas),
+        on_done=stage_task(progress, "gate", len(gate_jobs)),
+    )
     failures += _record_failures(writer, run_id, "extract", "jev_gate", gate_results)
 
     def apply_gate(store, item) -> None:
@@ -401,7 +414,8 @@ def run_extract(
 
 
 def run_index_llm(
-    writer: Writer, run_id: str, *, settings: Settings, pool: ThreadPoolExecutor, llm
+    writer: Writer, run_id: str, *, settings: Settings, pool: ThreadPoolExecutor, llm,
+    progress: Optional["Progress"] = None,
 ) -> bool:
     catalogs = writer.call(lambda store: store.list_catalogs(run_id))
     model_id = settings.llm.model or "default"
@@ -432,7 +446,10 @@ def run_index_llm(
             metas[ref] = meta
         labels: dict[str, tuple[str, str]] = {}
         failed = False
-        for _key, outcome, error in _fan_out(pool, jobs, on_error=_attempt_recorder(writer, run_id, metas)):
+        for _key, outcome, error in _fan_out(
+            pool, jobs, on_error=_attempt_recorder(writer, run_id, metas),
+            on_done=stage_task(progress, "index", len(jobs)),
+        ):
             if error is not None:
                 failed = True
             elif outcome:
@@ -456,7 +473,8 @@ def run_index_llm(
 
 
 def run_retrieve(
-    writer: Writer, run_id: str, *, settings: Settings, pool: ThreadPoolExecutor, llm
+    writer: Writer, run_id: str, *, settings: Settings, pool: ThreadPoolExecutor, llm,
+    progress: Optional["Progress"] = None,
 ) -> int:
     writer.call(lambda store: work.claim_stage(store, run_id, "retrieve"))
     model_id = settings.llm.model or "default"
@@ -486,7 +504,7 @@ def run_retrieve(
         )
         for requirement in requirements
     ]
-    results = _fan_out(pool, jobs)
+    results = _fan_out(pool, jobs, on_done=stage_task(progress, "retrieve", len(jobs)))
     failures = _record_failures(writer, run_id, "retrieve", "llm_nomination", results)
 
     def apply(store, item) -> None:
@@ -516,7 +534,8 @@ def run_retrieve(
 
 
 def run_verify(
-    writer: Writer, run_id: str, *, settings: Settings, pool: ThreadPoolExecutor, jev
+    writer: Writer, run_id: str, *, settings: Settings, pool: ThreadPoolExecutor, jev,
+    progress: Optional["Progress"] = None,
 ) -> int:
     writer.call(lambda store: work.claim_stage(store, run_id, "verify"))
     requirements = {r.req_id: r for r in writer.call(lambda store: store.list_requirements(run_id))}
@@ -554,7 +573,9 @@ def run_verify(
                     ),
                 )
             )
-        batch_results = _fan_out(pool, batch_jobs)
+        batch_results = _fan_out(
+            pool, batch_jobs, on_done=stage_task(progress, "verify", len(batch_jobs)),
+        )
         failures += _record_failures(writer, run_id, "verify", "jev_noul", batch_results)
         for _key, value, error in batch_results:
             if error is None:
@@ -576,7 +597,7 @@ def run_verify(
                     ),
                 )
             )
-        results = _fan_out(pool, jobs)
+        results = _fan_out(pool, jobs, on_done=stage_task(progress, "verify", len(jobs)))
         failures += _record_failures(writer, run_id, "verify", "jev_noul", results)
         persisted = [(key, item) for key, item, error in results if error is None]
 
@@ -592,7 +613,8 @@ def run_verify(
 
 
 def run_classify(
-    writer: Writer, run_id: str, *, settings: Settings, pool: ThreadPoolExecutor, jev
+    writer: Writer, run_id: str, *, settings: Settings, pool: ThreadPoolExecutor, jev,
+    progress: Optional["Progress"] = None,
 ) -> int:
     writer.call(lambda store: work.claim_stage(store, run_id, "classify"))
     requirements = {r.req_id: r for r in writer.call(lambda store: store.list_requirements(run_id))}
@@ -629,7 +651,9 @@ def run_classify(
                     ),
                 )
             )
-        batch_results = _fan_out(pool, batch_jobs)
+        batch_results = _fan_out(
+            pool, batch_jobs, on_done=stage_task(progress, "classify", len(batch_jobs)),
+        )
         failures += _record_failures(writer, run_id, "classify", "jev_choice", batch_results)
         for _key, value, error in batch_results:
             if error is None:
@@ -651,7 +675,7 @@ def run_classify(
                     ),
                 )
             )
-        results = _fan_out(pool, jobs)
+        results = _fan_out(pool, jobs, on_done=stage_task(progress, "classify", len(jobs)))
         failures += _record_failures(writer, run_id, "classify", "jev_choice", results)
         persisted = [(key, item) for key, item, error in results if error is None]
 
@@ -689,6 +713,7 @@ def run_pipeline(
     id_factory: IdFactory,
     run_id: Optional[str] = None,
     estimate: Optional[Callable[[str, int], None]] = None,
+    progress: Optional["Progress"] = None,
 ) -> RunResult:
     input_paths = [Path(p) for p in input_paths]
     catalog_paths = [Path(p) for p in catalog_paths]
@@ -723,10 +748,11 @@ def run_pipeline(
             with ThreadPoolExecutor(max_workers=2) as streams:
                 extract_stream = streams.submit(
                     run_extract, writer, selected, settings=settings, pool=pool,
-                    llm=llm, jev=jev,
+                    llm=llm, jev=jev, progress=progress,
                 )
                 index_stream = streams.submit(
-                    run_index_llm, writer, selected, settings=settings, pool=pool, llm=llm
+                    run_index_llm, writer, selected, settings=settings, pool=pool,
+                    llm=llm, progress=progress,
                 )
                 failures += extract_stream.result()
                 index_ok = index_stream.result()
@@ -735,12 +761,18 @@ def run_pipeline(
             if estimate is not None:
                 estimate("requirements", len(accepted))
             if index_ok:
-                failures += run_retrieve(writer, selected, settings=settings, pool=pool, llm=llm)
+                failures += run_retrieve(
+                    writer, selected, settings=settings, pool=pool, llm=llm, progress=progress,
+                )
                 candidate_count = writer.call(lambda store: store.counts(selected))["candidate_pairs"]
                 if estimate is not None:
                     estimate("candidates", candidate_count)
-                failures += run_verify(writer, selected, settings=settings, pool=pool, jev=jev)
-                failures += run_classify(writer, selected, settings=settings, pool=pool, jev=jev)
+                failures += run_verify(
+                    writer, selected, settings=settings, pool=pool, jev=jev, progress=progress,
+                )
+                failures += run_classify(
+                    writer, selected, settings=settings, pool=pool, jev=jev, progress=progress,
+                )
             else:
                 # An incomplete index is a gap and emits no artifacts: never report a
                 # successful `run` (mirrors run_map).
@@ -792,6 +824,7 @@ def run_extract_only(
     id_factory: IdFactory,
     run_id: Optional[str] = None,
     estimate: Optional[Callable[[str, int], None]] = None,
+    progress: Optional["Progress"] = None,
 ) -> RunResult:
     input_paths = [Path(p) for p in input_paths]
     computed_fingerprint = compute_fingerprint(input_paths, [])
@@ -813,7 +846,8 @@ def run_extract_only(
             if not writer.call(lambda store: work.stage_complete(store, selected, "load")):
                 writer.call(lambda store: load.run_load(store, selected, input_paths))
             failures += run_extract(
-                writer, selected, settings=settings, pool=pool, llm=llm, jev=jev
+                writer, selected, settings=settings, pool=pool, llm=llm, jev=jev,
+                progress=progress,
             )
         if estimate is not None:
             requirements = writer.call(lambda store: store.list_requirements(selected))
@@ -849,6 +883,7 @@ def run_map(
     id_factory: IdFactory,
     run_id: str,
     estimate: Optional[Callable[[str, int], None]] = None,
+    progress: Optional["Progress"] = None,
 ) -> RunResult:
     with RunStore.open(state_dir, clock=clock, id_factory=id_factory) as probe:
         row = probe.get_run(run_id)
@@ -871,17 +906,23 @@ def run_map(
                     catalog_format=settings.execution.catalog_format,
                     clock=clock, id_factory=id_factory,
                 ))
-            index_ok = run_index_llm(writer, run_id, settings=settings, pool=pool, llm=llm)
+            index_ok = run_index_llm(
+                writer, run_id, settings=settings, pool=pool, llm=llm, progress=progress,
+            )
             if index_ok:
                 failures += run_retrieve(
-                    writer, run_id, settings=settings, pool=pool, llm=llm
+                    writer, run_id, settings=settings, pool=pool, llm=llm, progress=progress,
                 )
                 if estimate is not None:
                     estimate("candidates", writer.call(
                         lambda store: store.counts(run_id)
                     )["candidate_pairs"])
-                failures += run_verify(writer, run_id, settings=settings, pool=pool, jev=jev)
-                failures += run_classify(writer, run_id, settings=settings, pool=pool, jev=jev)
+                failures += run_verify(
+                    writer, run_id, settings=settings, pool=pool, jev=jev, progress=progress,
+                )
+                failures += run_classify(
+                    writer, run_id, settings=settings, pool=pool, jev=jev, progress=progress,
+                )
             else:
                 # Mirror run_pipeline: an incomplete domain index must not terminalise
                 # retrieval or emit a misleading "mapped" run.
@@ -928,6 +969,7 @@ def resume_run(
     id_factory: IdFactory,
     run_id: str,
     estimate: Optional[Callable[[str, int], None]] = None,
+    progress: Optional["Progress"] = None,
 ) -> RunResult:
     with RunStore.open(state_dir, clock=clock, id_factory=id_factory) as store:
         if store.get_run(run_id) is None:
@@ -939,5 +981,5 @@ def resume_run(
     return run_pipeline(
         state_dir=state_dir, output=output, input_paths=input_paths,
         catalog_paths=catalog_paths, settings=settings, clock=clock,
-        id_factory=id_factory, run_id=run_id, estimate=estimate,
+        id_factory=id_factory, run_id=run_id, estimate=estimate, progress=progress,
     )

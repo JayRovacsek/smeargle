@@ -12,6 +12,7 @@ import typer
 from smeargle import __version__
 from smeargle.catalog_adapters.registry import parse_catalog
 from smeargle.config import Settings
+from smeargle.console import new_progress
 from smeargle.domain.clock import SystemClock
 from smeargle.domain.ids import UuidIdFactory
 from smeargle.errors import (
@@ -248,11 +249,13 @@ def run(
     selected = settings.execution.run_id or _select_run_id(
         settings, fingerprint, run_pipeline.config_hash(config)
     )
-    result = run_pipeline.run_pipeline(
-        state_dir=settings.state_dir, output=settings.output, input_paths=input_paths,
-        catalog_paths=catalog_paths, settings=settings, clock=SystemClock(),
-        id_factory=UuidIdFactory(), run_id=selected, estimate=_estimate_printer(),
-    )
+    with new_progress() as progress:
+        result = run_pipeline.run_pipeline(
+            state_dir=settings.state_dir, output=settings.output, input_paths=input_paths,
+            catalog_paths=catalog_paths, settings=settings, clock=SystemClock(),
+            id_factory=UuidIdFactory(), run_id=selected, estimate=_estimate_printer(),
+            progress=progress,
+        )
     _finish(result)
 
 
@@ -273,11 +276,13 @@ def extract(
     if not settings.jev.base_url:
         raise UsageError("extract requires --jev-base-url")
     _configure_oscal(settings)
-    result = run_pipeline.run_extract_only(
-        state_dir=settings.state_dir, output=settings.output, input_paths=input_paths,
-        settings=settings, clock=SystemClock(), id_factory=UuidIdFactory(),
-        run_id=settings.execution.run_id, estimate=_estimate_printer(),
-    )
+    with new_progress() as progress:
+        result = run_pipeline.run_extract_only(
+            state_dir=settings.state_dir, output=settings.output, input_paths=input_paths,
+            settings=settings, clock=SystemClock(), id_factory=UuidIdFactory(),
+            run_id=settings.execution.run_id, estimate=_estimate_printer(),
+            progress=progress,
+        )
     _finish(result)
 
 
@@ -302,11 +307,13 @@ def map(
     if not settings.jev.base_url:
         raise UsageError("map requires --jev-base-url")
     _configure_oscal(settings)
-    result = run_pipeline.run_map(
-        state_dir=settings.state_dir, output=settings.output, catalog_paths=catalog_paths,
-        settings=settings, clock=SystemClock(), id_factory=UuidIdFactory(),
-        run_id=settings.execution.run_id, estimate=_estimate_printer(),
-    )
+    with new_progress() as progress:
+        result = run_pipeline.run_map(
+            state_dir=settings.state_dir, output=settings.output, catalog_paths=catalog_paths,
+            settings=settings, clock=SystemClock(), id_factory=UuidIdFactory(),
+            run_id=settings.execution.run_id, estimate=_estimate_printer(),
+            progress=progress,
+        )
     _finish(result)
 
 
@@ -323,11 +330,13 @@ def resume(ctx: typer.Context) -> None:
     if not settings.jev.base_url:
         raise UsageError("resume requires --jev-base-url")
     _configure_oscal(settings)
-    result = run_pipeline.resume_run(
-        state_dir=settings.state_dir, output=settings.output, settings=settings,
-        clock=SystemClock(), id_factory=UuidIdFactory(),
-        run_id=settings.execution.run_id, estimate=_estimate_printer(),
-    )
+    with new_progress() as progress:
+        result = run_pipeline.resume_run(
+            state_dir=settings.state_dir, output=settings.output, settings=settings,
+            clock=SystemClock(), id_factory=UuidIdFactory(),
+            run_id=settings.execution.run_id, estimate=_estimate_printer(),
+            progress=progress,
+        )
     _finish(result)
 
 

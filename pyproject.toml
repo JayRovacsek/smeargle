@@ -17,6 +17,7 @@ dependencies = [
     "oscal==3.2.2",
     "pypdf>=6.0",
     "python-docx>=1.1",
+    "rich>=13.0",
 ]
 
 [project.scripts]

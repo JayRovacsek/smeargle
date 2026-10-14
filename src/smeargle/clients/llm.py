@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any, Mapping, Optional, Sequence, TypeVar
 
@@ -13,6 +14,8 @@ from pydantic import BaseModel, ValidationError
 from smeargle.clients.dto import loads_strict
 from smeargle.clients.ports import CallMeta, CallRecorder
 from smeargle.errors import FatalServiceError, ServiceError
+
+_logger = logging.getLogger(__name__)
 
 _MODES = ("json_schema", "json_object", "plain")
 _MAX_REPAIRS = 2
@@ -193,6 +196,9 @@ class OpenAiCompatibleLLM:
         return body
 
     def _post(self, body: dict[str, Any], meta: Optional[CallMeta]) -> _SdkResponse:
+        stage = meta.stage if meta is not None else "llm"
+        item_ref = meta.item_ref if meta is not None else "-"
+        call_type = meta.call_type if meta is not None else "llm"
         if self._recorder is not None and meta is not None:
             self._recorder.request(
                 stage=meta.stage, item_ref=meta.item_ref, call_type=meta.call_type,
@@ -226,6 +232,14 @@ class OpenAiCompatibleLLM:
 
         def backoff(attempt_no: int) -> None:
             delay = 0.5 * (2 ** (attempt_no - 1))
+            _logger.warning(
+                "llm retry %s %s attempt %s",
+                call_type, item_ref, attempt_no + 1,
+                extra={"smeargle": {
+                    "stage": stage, "item_ref": item_ref, "call_type": call_type,
+                    "model": self._model, "attempt_no": attempt_no + 1,
+                }},
+            )
             self._sleep(self._rng.uniform(0.0, min(8.0, delay)) if self._rng else delay)
 
         for attempt_no in range(1, self._retries + 2):
@@ -236,6 +250,14 @@ class OpenAiCompatibleLLM:
                 if attempt_no <= self._retries:
                     backoff(attempt_no)
                     continue
+                _logger.error(
+                    "llm %s %s failed: rate limited",
+                    call_type, item_ref,
+                    extra={"smeargle": {
+                        "stage": stage, "item_ref": item_ref, "call_type": call_type,
+                        "model": self._model, "http_status": 429,
+                    }},
+                )
                 record_failure(429)
                 return _SdkResponse(None, 429)
             except openai.APIStatusError as exc:
@@ -248,6 +270,14 @@ class OpenAiCompatibleLLM:
                 if exc.status_code in _RETRYABLE_STATUSES and attempt_no <= self._retries:
                     backoff(attempt_no)
                     continue
+                _logger.error(
+                    "llm %s %s failed: HTTP %s",
+                    call_type, item_ref, exc.status_code,
+                    extra={"smeargle": {
+                        "stage": stage, "item_ref": item_ref, "call_type": call_type,
+                        "model": self._model, "http_status": exc.status_code,
+                    }},
+                )
                 record_failure(exc.status_code)
                 return _SdkResponse(None, exc.status_code)
             except openai.APIConnectionError as exc:
@@ -255,15 +285,41 @@ class OpenAiCompatibleLLM:
                 if attempt_no <= self._retries:
                     backoff(attempt_no)
                     continue
+                _logger.error(
+                    "llm %s %s failed: %s",
+                    call_type, item_ref, type(exc).__name__,
+                    extra={"smeargle": {
+                        "stage": stage, "item_ref": item_ref, "call_type": call_type,
+                        "model": self._model, "error_class": type(exc).__name__,
+                    }},
+                )
                 record_failure(None)
                 raise _transport_error(exc) from exc
             except Exception as exc:
                 on_attempt(None, type(exc).__name__, str(exc))
+                _logger.error(
+                    "llm %s %s failed: %s",
+                    call_type, item_ref, type(exc).__name__,
+                    extra={"smeargle": {
+                        "stage": stage, "item_ref": item_ref, "call_type": call_type,
+                        "model": self._model, "error_class": type(exc).__name__,
+                    }},
+                )
                 record_failure(None)
                 raise ServiceError(f"LLM request failed: {exc}") from exc
 
             last_attempt_no = attempt_no
             self.call_count += 1
+            _logger.info(
+                "llm %s %s ok (%sms)",
+                call_type, item_ref, int((time.perf_counter() - start) * 1000),
+                extra={"smeargle": {
+                    "stage": stage, "item_ref": item_ref, "call_type": call_type,
+                    "model": self._model, "http_status": 200,
+                    "attempt_no": last_attempt_no,
+                    "duration_ms": int((time.perf_counter() - start) * 1000),
+                }},
+            )
             if self._recorder is not None and meta is not None:
                 self._recorder.response(
                     stage=meta.stage, item_ref=meta.item_ref, call_type=meta.call_type,

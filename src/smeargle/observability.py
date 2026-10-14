@@ -7,6 +7,10 @@ import logging
 import sys
 from typing import Any, Mapping
 
+from rich.logging import RichHandler
+
+from smeargle.console import console
+
 REDACTED = "[REDACTED]"
 _SECRET_MARKERS = (
     "api_key",
@@ -54,11 +58,13 @@ class JsonFormatter(logging.Formatter):
 
 def configure_logging(log_format: str = "text", verbose: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
-    handler = logging.StreamHandler(stream=sys.stderr)
     if log_format == "json":
+        handler: logging.Handler = logging.StreamHandler(stream=sys.stderr)
         handler.setFormatter(JsonFormatter())
     else:
-        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+        rich_handler = RichHandler(console=console(), show_path=False, rich_tracebacks=True)
+        rich_handler.setFormatter(logging.Formatter())
+        handler = rich_handler
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
