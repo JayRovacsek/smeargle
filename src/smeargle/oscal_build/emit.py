@@ -211,23 +211,41 @@ def _mapped_ids(assembly: Assembly) -> set[str]:
     return ids
 
 
-def _validate(model: str | None, document: Mapping[str, Any] | None) -> None:
+def _validate(
+    model: str | None, document: Mapping[str, Any] | None, *, href: str | None = None
+) -> None:
     if model is None or document is None:
         return
     try:
-        facade.validate(model, document)
+        facade.validate(model, document, href=href)
     except CatalogError as exc:
         raise IntegrityError(str(exc)) from exc
 
 
-def integrity_gate(assembly: Assembly, ledger: Ledger, *, partial: bool = False) -> None:
+def _document_href(output: Path | None, name: str) -> str | None:
+    if output is None:
+        return None
+    return (Path(output) / name).absolute().as_uri()
+
+
+def integrity_gate(
+    assembly: Assembly,
+    ledger: Ledger,
+    *,
+    partial: bool = False,
+    output: Path | None = None,
+) -> None:
     _validate("catalog", assembly.requirements_catalog)
     _check_fragments(assembly)
     _check_unique_control_ids(ledger)
     if partial:
         return
-    _validate("profile", assembly.profile)
-    _validate("mapping-collection", assembly.mapping_collection)
+    _validate("profile", assembly.profile, href=_document_href(output, "profile.json"))
+    _validate(
+        "mapping-collection",
+        assembly.mapping_collection,
+        href=_document_href(output, "mapping-collection.json"),
+    )
     _check_accepted_coverage(assembly, ledger)
     _check_imports(assembly, ledger)
 

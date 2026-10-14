@@ -46,11 +46,19 @@ def _safe_loads(cls: Any, content: Any, *, href: str | None = None) -> Any:
         raise CatalogError(f"could not parse OSCAL content: {exc}") from exc
 
 
-def validate(model: str, document: Mapping[str, Any]) -> None:
+def validate(
+    model: str, document: Mapping[str, Any], *, href: str | None = None
+) -> None:
+    """Validate an OSCAL model.
+
+    ``href`` is the base used to resolve the document's relative imports; pass the
+    document's own absolute ``file://`` URI so imports resolve against its location
+    rather than the process working directory.
+    """
     cls = _MODELS.get(model)
     if cls is None:
         raise CatalogError(f"unsupported OSCAL model '{model}'")
-    instance = _safe_loads(cls, dict(document))
+    instance = _safe_loads(cls, dict(document), href=href)
     if not instance.is_valid:
         raise CatalogError(f"invalid OSCAL {model}: {_summary(instance)}")
 
@@ -61,17 +69,19 @@ def load_document(path: Path) -> dict[str, Any]:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         raise CatalogError(f"could not read OSCAL document '{path}': {exc}") from exc
-    instance = _safe_loads(OSCAL, text, href=str(path))
+    instance = _safe_loads(OSCAL, text, href=path.absolute().as_uri())
     if not instance.is_valid:
         raise CatalogError(f"'{path}' is not valid OSCAL: {_summary(instance)}")
     return json.loads(instance.json)
 
 
-def serialise_json(model: str, document: Mapping[str, Any]) -> str:
+def serialise_json(
+    model: str, document: Mapping[str, Any], *, href: str | None = None
+) -> str:
     cls = _MODELS.get(model)
     if cls is None:
         raise CatalogError(f"unsupported OSCAL model '{model}'")
-    instance = _safe_loads(cls, dict(document))
+    instance = _safe_loads(cls, dict(document), href=href)
     if not instance.is_valid:
         raise CatalogError(f"cannot serialise invalid OSCAL {model}: {_summary(instance)}")
     return instance.dumps(format="json", pretty_print=True)
@@ -79,7 +89,7 @@ def serialise_json(model: str, document: Mapping[str, Any]) -> str:
 
 def write_document(path: Path, model: str, document: Mapping[str, Any]) -> None:
     """Validate then write an OSCAL model as pretty JSON (spec 11)."""
-    text = serialise_json(model, document)
     path = Path(path)
+    text = serialise_json(model, document, href=path.absolute().as_uri())
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")

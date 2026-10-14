@@ -111,7 +111,7 @@ def test_run_assemble_checks_integrity_before_writing_any_assemble_artifact(tmp_
         _seed(store)
         checked: list[str] = []
 
-        def boom(assembly, ledger, *, partial=False):
+        def boom(assembly, ledger, *, partial=False, output=None):
             checked.append("gate")
             raise IntegrityError("broken output")
 

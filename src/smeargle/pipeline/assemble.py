@@ -84,7 +84,7 @@ def run_assemble(
     # nothing here is written until the gate has passed. Phase 2's Stage 2 `ingest_catalogs`
     # already wrote output/catalogs/*.json before assembly; that pre-assembly output is
     # external to this invariant and is deliberately not rolled back.
-    emit.integrity_gate(assembly, ledger, partial=partial)
+    emit.integrity_gate(assembly, ledger, partial=partial, output=Path(output))
     emit.write_assembly(assembly, Path(output))
     emit.export_evidence(ledger.evidence, Path(output))
     return assembly

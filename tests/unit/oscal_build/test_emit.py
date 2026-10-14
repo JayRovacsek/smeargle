@@ -1,4 +1,5 @@
 import json
+import logging
 
 import pytest
 from support.ledger import CLOCK, IDS, catalog, ledger, mapping_row, requirement
@@ -113,3 +114,40 @@ def test_partial_assembly_emits_only_the_requirements_catalog(tmp_path):
     assert [path.name for path in emit.write_assembly(assembly, tmp_path)] == [
         "requirements-catalog.json"
     ]
+
+
+_IMPORTED_CATALOG = {
+    "catalog": {
+        "uuid": "11111111-1111-4111-8111-111111111111",
+        "metadata": {
+            "title": "Imported",
+            "last-modified": "2026-01-01T00:00:00Z",
+            "version": "1.0.0",
+            "oscal-version": "1.2.3",
+        },
+        "controls": [{"id": "c-1.1", "title": "Policy"}],
+    }
+}
+
+
+def test_gate_resolves_profile_imports_against_the_output_dir(tmp_path, caplog):
+    assembly = _assemble()
+    facade.write_document(tmp_path / "catalogs" / "vendor.json", "catalog", _IMPORTED_CATALOG)
+    facade.write_document(
+        tmp_path / "requirements-catalog.json", "catalog", assembly.requirements_catalog
+    )
+    with caplog.at_level(logging.WARNING):
+        emit.integrity_gate(assembly, ledger(), output=tmp_path)
+    assert "Failed to load content from source" not in caplog.text
+
+
+def test_gate_without_output_resolves_profile_imports_against_cwd(tmp_path, caplog, monkeypatch):
+    # Pin the regression: with no base, the oscal library resolves the profile's relative
+    # import against the process CWD, so the lookup misses and the source fails to load.
+    assembly = _assemble()
+    empty = tmp_path / "cwd"
+    empty.mkdir()
+    monkeypatch.chdir(empty)
+    with caplog.at_level(logging.WARNING):
+        emit.integrity_gate(assembly, ledger())
+    assert "Failed to load content from source" in caplog.text

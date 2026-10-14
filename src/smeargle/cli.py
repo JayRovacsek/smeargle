@@ -352,7 +352,9 @@ def validate(
                         ("mapping-collection.json", "mapping-collection")):
         path = settings.output / name
         if path.exists():
-            facade.validate(model, facade.load_document(path))
+            facade.validate(
+                model, facade.load_document(path), href=path.absolute().as_uri()
+            )
             typer.echo(f"{path}: valid")
     rationale = settings.output / "rationale.json"
     if rationale.exists():
