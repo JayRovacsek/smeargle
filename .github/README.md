@@ -31,10 +31,10 @@
    [OSCAL](https://pages.nist.gov/OSCAL/), or non-OSCAL "container" shapes
    which are normalised behind the scenes).
 2. Extracts RFC 2119 normative requirements from the documents. Each candidate
-   is proposed by an LLM, then gated by a JEV-style System 1 decision engine
+   is proposed by an LLM, then gated by a System 1 decision model
    for authenticity and keyword classification.
 3. Maps every accepted requirement to candidate controls (LLM retrieval),
-   verifies each candidate pair (JEV `noul` probability gate) and classifies
+   verifies each candidate pair (decision model `noul` probability gate) and classifies
    the confirmed pairs with an OSCAL relationship (`equivalent-to`, `equal-to`,
    `subset-of`, `superset-of`, `intersects-with`).
 4. Emits a complete, schema-validated OSCAL 1.2.3 output set, plus a
@@ -42,8 +42,8 @@
 
 It never runs or hosts a model. It speaks HTTP to whatever endpoints you point
 it at: a local llama.cpp server, OpenRouter, or any OpenAI-compatible LLM for
-proposal/retrieval, and a [Laya](https://github.com/NandhaKishorM/laya)
-SystemOne-style JEV endpoint for decisions.
+proposal/retrieval, and a separate decision model endpoint for the gated
+decisions.
 
 ## The canvas
 
@@ -52,9 +52,9 @@ SystemOne-style JEV endpoint for decisions.
 | `-i` documents: PDF, DOCX, JSON, text/Markdown | `requirements-catalog.json`: OSCAL catalog of extracted requirements, grouped per source document |
 | `-c` catalogs: OSCAL or non-OSCAL container JSON | `profile.json`: OSCAL tailoring profile importing every catalog, with per-requirement mapping props |
 | LLM endpoint (OpenAI-compatible) | `mapping-collection.json`: OSCAL control mappings with confidence percentages |
-| JEV endpoint (chat decisions, or legacy Laya SystemOne) | `rationale.json`: the audit record of gates, confidences, unmapped/rejected reasons |
+| Decision model endpoint (chat decisions, or legacy SystemOne) | `rationale.json`: the audit record of gates, confidences, unmapped/rejected reasons |
 | | `catalogs/<source-stem>.json`: normalised OSCAL catalogs (one per input) |
-| | `evidence/`: every raw redacted LLM/JEV request/response |
+| | `evidence/`: every raw redacted LLM/decision-model request/response |
 
 ## How it paints
 
@@ -73,11 +73,11 @@ CLI (subcommand)
       0 load ──► inputs → Documents (ledger)
       1 extract ┐ (run concurrently — disjoint data)
       2 index   ┘
-          extract:  Documents → Requirements   (LLM propose → JEV gate)
+          extract:  Documents → Requirements   (LLM propose → decision gate)
           index:    catalogs → Controls + DomainIndex (cached cross-run)
       3 retrieve ─► Requirement → candidate Controls (LLM domain pick + nomination)
-      4 verify   ─► (Requirement, Control) → JEV noul → passed/rejected
-      5 classify ─► passed pair → JEV choice → OSCAL relationship + confidence
+      4 verify   ─► (Requirement, Control) → decision noul → passed/rejected
+      5 classify ─► passed pair → decision choice → OSCAL relationship + confidence
       6 assemble ─► pure function of the ledger → OSCAL artifacts
 
   → integrity gate (validate everything, fail the run on violation)
@@ -124,7 +124,7 @@ control?"*, *"Which RFC 2119 keyword is it?"*, *"Which OSCAL relationship
 holds?"*. These are classification problems, so a classification model answers
 them, not the generative model.
 
-**What it does.** The JEV endpoint answers typed questions over HTTP:
+**What it does.** The decision model endpoint answers typed questions over HTTP:
 
 - `noul`: a binary yes/no probability. Used as the authenticity gate at
   extraction (against `--extract-gate-threshold`) and the relatedness gate at
@@ -147,7 +147,7 @@ them, not the generative model.
    reject, which gives a principled, auditable gate. A generative LLM emits
    prose, and thresholding its text is guesswork.
 3. A classifier cannot hallucinate a mapping. A decision engine is
-   encoder-based (Laya is a ModernBERT-style encoder): it selects among the
+   encoder-based (ModernBERT-style): it selects among the
    options it is given and cannot invent a requirement, a control id, or an
    `href` that was not in its inputs. The generative LLM can, which is why its
    output is never trusted as a verdict.
@@ -212,13 +212,13 @@ The flake builds for `x86_64-linux` and `aarch64-linux` and provides
   --llm-model liquid/lfm-2.5-2.6b:free \
   --llm-auth-file ./.secrets/llm-token \
   --jev-base-url http://127.0.0.1:8080 \
-  --jev-model laya --yes \
+  --jev-model english --yes \
   run -i ./example-policy.md -c ./pci-dss-4.json
 ```
 
 - `--llm-base-url` accepts any OpenAI-compatible `/v1/chat/completions` endpoint.
-- `--jev-base-url` accepts a Laya SystemOne server; `--jev-model` names the
-  checkpoint that server exposes (e.g. an `english` alias).
+- `--jev-base-url` accepts a SystemOne-style decision model server; `--jev-model`
+  names the checkpoint that server exposes (e.g. an `english` alias).
 - Secrets come from `--*-auth-file` or `--*-api-key-env` only, never CLI
   tokens, and are redacted before persistence.
 
@@ -237,7 +237,7 @@ Key options: repeatable `-i/--input` and `-c/--catalog`, `--catalog-format
 {auto,oscal}`, `--config` (TOML/YAML), `--log-format {text,json}`, tuning knobs
 (`--extract-gate-threshold` 0.50, `--mapped-threshold` 0.50, `--category-high`
 0.80, `--category-medium` 0.50, `--nomination-cap`, `--concurrency`,
-`--jev-transport {chat,systemone}`, JEV batching via
+`--jev-transport {chat,systemone}`, decision model batching via
 `--jev-batch/--no-jev-batch`, `--jev-batch-size`,
 `--jev-min-confidence`). Configuration precedence: CLI flags > environment
 (`SMEARGLE_*`) > config file > defaults.
@@ -282,8 +282,8 @@ smeargle --output out/ validate -c NIST_SP-800-53_rev5_catalog.json
 smeargle --state-dir ./.smeargle --output out/ status
 ```
 
-**JEV transport selection**: `chat` (the default) speaks the chat-completions
-decisions wire; `systemone` selects the legacy Laya protocol.
+**Decision model transport selection**: `chat` (the default) speaks the chat-completions
+decisions wire; `systemone` selects the legacy protocol.
 
 ```bash
 smeargle ... --jev-base-url http://127.0.0.1:8731/v1 --jev-transport chat ...
@@ -349,7 +349,7 @@ Engineering outcomes:
   reproduces the exact artifacts.
 - Resume correctness proven by test: killing a run between stages and resuming
   issues zero new external calls for completed work.
-- Wire-contract hardening: the JEV client was corrected against the real Laya
+- Wire-contract hardening: the decision model client was corrected against a real
   SystemOne server (keyed questions and corrected wire shape), and the LLM
   client's schema-instruction ordering was fixed, after live smoke runs
   surfaced the mismatches.
