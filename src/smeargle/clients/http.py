@@ -30,6 +30,21 @@ def load_bearer_token(*, auth_file: Optional[Path], api_key_env: Optional[str]) 
     return None
 
 
+def normalize_base_url(base_url: str) -> str:
+    """Strip a trailing ``/v1`` (OpenAI SDK convention) so paths like
+    ``/v1/systemone`` do not double-prefix into ``/v1/v1/systemone``."""
+    trimmed = base_url.rstrip("/")
+    if trimmed.endswith("/v1"):
+        trimmed = trimmed[: -len("/v1")]
+    return trimmed
+
+
+def ensure_v1_suffix(base_url: str) -> str:
+    """Append ``/v1`` when absent (openai SDK convention)."""
+    trimmed = base_url.rstrip("/")
+    return trimmed if trimmed.endswith("/v1") else trimmed + "/v1"
+
+
 def _log_request(request: httpx.Request) -> None:
     _logger.debug(
         "http request",
@@ -59,7 +74,7 @@ def build_client(
         max_connections=max_connections, max_keepalive_connections=max_connections
     )
     return httpx.Client(
-        base_url=base_url,
+        base_url=normalize_base_url(base_url),
         timeout=httpx.Timeout(timeout),
         headers=headers,
         limits=limits,

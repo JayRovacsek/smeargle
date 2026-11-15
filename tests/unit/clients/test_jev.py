@@ -1,14 +1,12 @@
 import json
 
 import httpx
-import pytest
 import respx
 from fakes.clients import RecordingRecorder
 
 from smeargle.clients.http import build_client
 from smeargle.clients.jev import LayaJevClient
 from smeargle.domain.jev import JevQuestion
-from smeargle.errors import ServiceError
 
 
 def _noul(confidence: float) -> dict:
@@ -56,42 +54,21 @@ def test_choice_sends_options_and_records_entropy_separately():
 
 
 @respx.mock
-def test_systemone_batch_maps_results_to_states():
-    probabilities = {"a": 0.9, "b": 0.1, "c": 0.7}
-
+def test_batch_loops_per_state_calls():
     def handler(request):
         body = json.loads(request.content)
-        assert body["questions"] == {"q0": {"type": "noul", "instructions": "q?"}}
-        return httpx.Response(
-            200, json={"results": [
-                {"answers": {"q0": _noul(probabilities[state])}} for state in body["states"]
-            ]}
-        )
+        confidence = 0.9 if body["state"] == "a" else 0.1
+        return httpx.Response(200, json={"answers": {"q0": _noul(confidence)}})
 
-    respx.post("https://jev.example/v1/decide/batch").mock(side_effect=handler)
-    question = JevQuestion(question="q?", kind="noul")
-    results = _client(retries=0, batch=True).systemone_batch(["a", "b", "c"], [question])
-    assert [r.answers[0].answer for r in results] == ["yes", "no", "yes"]
-
-
-@respx.mock
-def test_batch_short_result_array_raises_service_error():
-    respx.post("https://jev.example/v1/decide/batch").mock(
-        return_value=httpx.Response(200, json={"results": [{"answers": {"q0": _noul(0.5)}}]})
+    route = respx.post("https://jev.example/v1/systemone").mock(side_effect=handler)
+    batch_route = respx.post("https://jev.example/v1/decide/batch").mock(
+        return_value=httpx.Response(200, json={"results": []})
     )
     question = JevQuestion(question="q?", kind="noul")
-    with pytest.raises(ServiceError):
-        _client(retries=0, batch=True).systemone_batch(["a", "b"], [question])
-
-
-@respx.mock
-def test_batch_non_object_body_raises_service_error():
-    respx.post("https://jev.example/v1/decide/batch").mock(
-        return_value=httpx.Response(200, text="gateway noise")
-    )
-    question = JevQuestion(question="q?", kind="noul")
-    with pytest.raises(ServiceError, match="missing results"):
-        _client(retries=0, batch=True).systemone_batch(["a"], [question])
+    results = _client(retries=0, batch=True).systemone_batch(["a", "b"], [question])
+    assert route.call_count == 2
+    assert batch_route.call_count == 0
+    assert [r.answers[0].answer for r in results] == ["yes", "no"]
 
 
 @respx.mock
@@ -105,18 +82,23 @@ def test_batch_disabled_falls_back_to_sequential_calls():
 
 
 @respx.mock
-def test_batch_size_clamps_to_64_and_omits_min_confidence():
-    route = respx.post("https://jev.example/v1/decide/batch").mock(
-        side_effect=lambda request: httpx.Response(
-            200, json={"results": [
-                {"answers": {"q0": _noul(0.9)}} for _ in json.loads(request.content)["states"]
-            ]}
-        )
+def test_base_url_v1_suffix_is_normalised():
+    route = respx.post("https://jev.example/v1/systemone").mock(
+        return_value=httpx.Response(200, json={"answers": {"q0": _noul(0.9)}})
     )
-    question = JevQuestion(question="q?", kind="noul")
-    client = _client(retries=0, batch=True, batch_size=64, min_confidence=0.4)
-    client.systemone_batch([str(i) for i in range(70)], [question])
-    assert route.call_count == 2
-    first = json.loads(route.calls[0].request.content)
-    assert len(first["states"]) == 64
-    assert "min_confidence" not in first
+    client = LayaJevClient(
+        build_client(base_url="https://jev.example/v1", timeout=5.0), model="jev-1", retries=0
+    )
+    client.systemone("state", [JevQuestion(question="q?", kind="noul")])
+    assert str(route.calls[0].request.url) == "https://jev.example/v1/systemone"
+
+
+@respx.mock
+def test_min_confidence_not_sent_on_wire():
+    route = respx.post("https://jev.example/v1/systemone").mock(
+        return_value=httpx.Response(200, json={"answers": {"q0": _noul(0.9)}})
+    )
+    client = _client(retries=0, min_confidence=0.6)
+    client.systemone("state", [JevQuestion(question="q?", kind="noul")])
+    body = json.loads(route.calls[0].request.content)
+    assert "min_confidence" not in body

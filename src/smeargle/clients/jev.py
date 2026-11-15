@@ -18,13 +18,7 @@ from smeargle.clients.retry import Attempt, RetryPolicy, request_with_retry
 from smeargle.domain.jev import JevQuestion, JevResult
 from smeargle.errors import FatalServiceError, ServiceError
 
-_BATCH_LIMIT = 64
-
 _logger = logging.getLogger(__name__)
-
-
-def _batches(items: list[Any], size: int) -> list[list[Any]]:
-    return [items[index : index + size] for index in range(0, len(items), size)]
 
 
 class LayaJevClient:
@@ -43,8 +37,8 @@ class LayaJevClient:
     ) -> None:
         self._client = client
         self._model = model
-        self._batch = batch
-        self._batch_size = min(_BATCH_LIMIT, max(1, batch_size))
+        # batch/batch_size are accepted for CLI compatibility; the target
+        # server does not support batching, so calls always loop per state.
         self._min_confidence = min_confidence
         self._recorder = recorder
         self._policy = RetryPolicy(retries, sleep=sleep or time.sleep, rng=rng)
@@ -57,16 +51,13 @@ class LayaJevClient:
             "state": state,
             "questions": {f"q{i}": question_to_keyed_wire(q) for i, q in enumerate(questions)},
         }
-        if self._min_confidence is not None:
-            payload["min_confidence"] = self._min_confidence
+        # client-side gate only; not part of the wire request
         response = self._post("/v1/systemone", payload, meta)
         parsed = JevSystemOneResponseModel.model_validate(self._safe_json(response))
         return single_result_to_domain(questions, parsed.answers)
 
-    # The reference Laya server exposes batching at /v1/decide/batch with a
-    # shared-questions body: every state is evaluated against the same
-    # questions, and each result element carries the same shape as a single
-    # systemone response (server.cpp handle_request batch branch).
+    # The target server has no batch route; batching falls back to per-state
+    # calls regardless of the batch flag.
     def systemone_batch(
         self,
         states: Sequence[str],
@@ -74,31 +65,7 @@ class LayaJevClient:
         *,
         meta: Optional[CallMeta] = None,
     ) -> list[JevResult]:
-        if not self._batch:
-            return [self.systemone(state, questions, meta=meta) for state in states]
-        results: list[JevResult] = []
-        keyed = {f"q{i}": question_to_keyed_wire(q) for i, q in enumerate(questions)}
-        for group in _batches(list(states), self._batch_size):
-            payload: dict[str, Any] = {
-                "model": self._model,
-                "states": group,
-                "questions": keyed,
-            }
-            response = self._post("/v1/decide/batch", payload, meta)
-            body = self._safe_json(response)
-            if not isinstance(body, dict) or "results" not in body:
-                raise ServiceError("JEV batch response is missing results")
-            parsed = [
-                JevSystemOneResponseModel.model_validate(element) for element in body["results"]
-            ]
-            if len(parsed) != len(group):
-                raise ServiceError(
-                    f"JEV batch returned {len(parsed)} result(s) "
-                    f"for {len(group)} submitted state(s)"
-                )
-            for element in parsed:
-                results.append(single_result_to_domain(questions, element.answers))
-        return results
+        return [self.systemone(state, questions, meta=meta) for state in states]
 
     def _post(
         self, path: str, payload: dict[str, Any], meta: Optional[CallMeta]
