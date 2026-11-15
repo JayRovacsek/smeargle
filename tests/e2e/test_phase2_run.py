@@ -89,6 +89,8 @@ def test_phase2_run_ingests_and_emits_valid_catalog(tmp_path):
             "https://llm.example",
             "--jev-base-url",
             "https://jev.example",
+            "--jev-transport",
+            "systemone",
             "run",
             "-i",
             str(document),
