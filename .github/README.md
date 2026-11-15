@@ -4,6 +4,10 @@
 
 **The painter that reads the world and paints it onto the canvas of compliance.**
 
+> **AI-assisted work.** This package was written explicitly with AI assistance —
+> halogen-qwen3.8-flash-next via OpenCode — and every commit carries an
+> `Assisted-by` trailer.
+
 [![Python][python-badge]][python-link]
 [![Nix Flakes][nix-badge]][nix-link]
 [![Typer][typer-badge]][typer-link]
@@ -15,6 +19,8 @@
 [![Ruff][ruff-badge]][ruff-link]
 [![mypy][mypy-badge]][mypy-link]
 [![License: GPL-3.0][license-badge]][license-link]
+[![Built by][builtby-badge]][builtby-link]
+[![Via][via-badge]][via-link]
 
 </div>
 
@@ -71,7 +77,7 @@ SystemOne-style JEV endpoint for decisions.
 | `-i` documents: PDF, DOCX, JSON, text/Markdown | `requirements-catalog.json` — OSCAL catalog of extracted requirements, grouped per source document |
 | `-c` catalogs: OSCAL or non-OSCAL container JSON | `profile.json` — OSCAL tailoring profile importing **every** catalog, with per-requirement mapping props |
 | LLM endpoint (OpenAI-compatible) | `mapping-collection.json` — OSCAL control mappings with confidence percentages |
-| JEV endpoint (Laya SystemOne wire protocol) | `rationale.json` — the audit record: gates, confidences, unmapped/rejected reasons |
+| JEV endpoint (chat decisions, or legacy Laya SystemOne) | `rationale.json` — the audit record: gates, confidences, unmapped/rejected reasons |
 | | `catalogs/<source-stem>.json` — normalised OSCAL catalogs (one per input) |
 | | `evidence/` — every raw redacted LLM/JEV request/response |
 
@@ -264,10 +270,76 @@ The flake builds for `x86_64-linux` and `aarch64-linux` and provides
 Key options: repeatable `-i/--input` and `-c/--catalog`, `--catalog-format
 {auto,oscal}`, `--config` (TOML/YAML), `--log-format {text,json}`, tuning knobs
 (`--extract-gate-threshold` 0.50, `--mapped-threshold` 0.50, `--category-high`
-0.80, `--category-medium` 0.50, `--nomination-cap`, `--concurrency`, JEV
-batching via `--jev-batch/--no-jev-batch`, `--jev-batch-size`,
+0.80, `--category-medium` 0.50, `--nomination-cap`, `--concurrency`,
+`--jev-transport {chat,systemone}`, JEV batching via
+`--jev-batch/--no-jev-batch`, `--jev-batch-size`,
 `--jev-min-confidence`). Configuration precedence: CLI flags > environment
 (`SMEARGLE_*`) > config file > defaults.
+
+### Examples
+
+Assuming `smeargle` on `PATH` (or `./result/bin/smeargle`):
+
+**Extract only** — pull requirements from several documents without mapping:
+
+```bash
+smeargle --llm-base-url https://openrouter.ai/api/v1 --llm-auth-file ./.secrets/llm-token \
+  --jev-base-url http://127.0.0.1:8731/v1 --output out/ --yes \
+  extract -i policy.pdf -i standard.docx
+```
+
+**Map an existing run** to an additional catalog, reusing the stored extraction:
+
+```bash
+smeargle --llm-base-url https://openrouter.ai/api/v1 --llm-auth-file ./.secrets/llm-token \
+  --jev-base-url http://127.0.0.1:8731/v1 --output out/ --run-id run-e2e --yes \
+  map -c csa-ccm-301.json
+```
+
+**Resume** an interrupted run from its checkpoint — completed work issues zero
+new external calls:
+
+```bash
+smeargle --llm-base-url https://openrouter.ai/api/v1 --llm-auth-file ./.secrets/llm-token \
+  --jev-base-url http://127.0.0.1:8731/v1 --output out/ --run-id run-e2e --yes resume
+```
+
+**Validate** input catalogs and emitted artifacts against the OSCAL schemas:
+
+```bash
+smeargle --output out/ validate -c NIST_SP-800-53_rev5_catalog.json
+```
+
+**Status** — inspect recorded runs, per-stage progress and emitted artifacts:
+
+```bash
+smeargle --state-dir ./.smeargle --output out/ status
+```
+
+**JEV transport selection** — `chat` (the default) speaks the chat-completions
+decisions wire; `systemone` selects the legacy Laya protocol:
+
+```bash
+smeargle ... --jev-base-url http://127.0.0.1:8731/v1 --jev-transport chat ...
+smeargle ... --jev-base-url http://127.0.0.1:8080 --jev-transport systemone ...
+```
+
+**Config file + environment** — stable settings in TOML, secrets via env only:
+
+```toml
+# smeargle.toml
+[llm]
+base_url = "https://openrouter.ai/api/v1"
+model = "liquid/lfm-2.5-2.6b:free"
+[jev]
+base_url = "http://127.0.0.1:8731/v1"
+```
+
+```bash
+SMEARGLE_LLM__API_KEY_ENV=OPENROUTER_API_KEY \
+  smeargle --config smeargle.toml --output out/ --yes \
+  run -i example-policy.md -c pci-dss-4.json
+```
 
 ### Exit codes
 
@@ -370,7 +442,7 @@ OSCAL 1.2.3 schemas.
 [sqlite-link]: https://sqlite.org/
 [oscal-badge]: https://img.shields.io/badge/OSCAL-1.2.3-215287
 [oscal-link]: https://pages.nist.gov/OSCAL-Reference/models/v1.2.3/
-[pytest-badge]: https://img.shields.io/badge/pytest-330%20passed-0A9EDC?logo=pytest&logoColor=white
+[pytest-badge]: https://img.shields.io/badge/pytest-347%20passed-0A9EDC?logo=pytest&logoColor=white
 [pytest-link]: https://docs.pytest.org/
 [ruff-badge]: https://img.shields.io/badge/ruff-lint%20%2B%20format-261230?logo=ruff&logoColor=white
 [ruff-link]: https://docs.astral.sh/ruff/
@@ -378,3 +450,7 @@ OSCAL 1.2.3 schemas.
 [mypy-link]: https://mypy-lang.org/
 [license-badge]: https://img.shields.io/badge/license-GPL--3.0-blue
 [license-link]: ../LICENSE
+[builtby-badge]: https://img.shields.io/badge/built_by-halogen--qwen3.8--flash--next-blue
+[builtby-link]: https://opencode.ai
+[via-badge]: https://img.shields.io/badge/via-OpenCode-11181C
+[via-link]: https://opencode.ai
