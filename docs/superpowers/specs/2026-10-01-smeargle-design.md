@@ -356,6 +356,14 @@ same order. For `noul` questions the returned probability **is** that response's
 every JEV response's `answer_confidence`** (default disabled) and does not
 replace `--extract-gate-threshold` / `--mapped-threshold`.
 
+> **Amended 2026-11-15 (intentional deviation):** against the halogen
+> decision server, the default transport is now the OpenAI Decisions pattern
+> (`/v1/chat/completions` with a `json_schema` enum and `logprobs`), selected
+> by `jev.transport` (`chat` default, `systemone` legacy). The legacy
+> `systemone` transport no longer posts `/v1/decide/batch` (the server has no
+> batch route) and no longer sends `min_confidence` on the wire — it is
+> applied client-side only.
+
 ### 8.3 Retry policy
 
 Retry only idempotent calls, only on connection/timeout/408/429/5xx, with
@@ -812,7 +820,7 @@ intentional; the register exists so the spec and code agree on the delta.
 | # | Area | Original intent | Current implementation | Status |
 |---|---|---|---|---|
 | D1 | §8.1 LLM transport | Hand-rolled `httpx.Client` delegating to `retry.request_with_retry` | Official `openai` SDK (`max_retries=0`) with an app-level retry wrapper; Retry-After honoured, backoff capped at 60s | Maintained (see §8.1 amendment, plan 2026-11-15) |
-| D2 | §8.2 JEV batch endpoint | `POST {jev}/v1/systemone/batch` with per-`(state, questions)` items | `POST {jev}/v1/decide/batch` with a shared `questions` dict applied to all `states`; DTOs use the keyed `q0..qN` discriminated-union shape | Maintained — matches the reference Laya server's actual batch route |
+| D2 | §8.2 JEV batch endpoint | `POST {jev}/v1/systemone/batch` with per-`(state, questions)` items | `POST {jev}/v1/decide/batch` with a shared `questions` dict applied to all `states`; DTOs use the keyed `q0..qN` discriminated-union shape | Superseded 2026-11-15 — batch route removed; see D10 |
 | D3 | §8.2 noul probability | The returned probability **is** the response's `answer_confidence` | Prefers the `noul` field; falls back to `confidence`, then `0.0`; the `yes`/`no` label is synthesised at the 0.5 midpoint | Maintained |
 | D4 | §6/§12 flag naming | `--llm-endpoint` / `--jev-endpoint` (config `endpoint`) | `--llm-base-url` / `--jev-base-url` (config `base_url`), consistently across CLI, config, and tests | Maintained |
 | D5 | §6/§15 redaction | Secrets are redacted before any persistence, no opt-out | `--redact/--no-redact` toggle (default on) plus `Execution.redact` config field | Maintained |
@@ -820,3 +828,4 @@ intentional; the register exists so the spec and code agree on the delta.
 | D7 | §11.6 facade validation | `instance.validate()` (full metaschema validation) | `instance.is_valid` (lighter parse/required-fields check) | Intentional — looser validation of incoming data is desired |
 | D8 | §4/§5 layout extras | No `console.py`; `JevResult` in `clients/ports.py`; no `Ledger` in `domain/` | `console.py` (Rich console), `domain/jev.py` (Jev* values), `Ledger` in `domain/run.py` | Maintained |
 | D9 | Misc hardening | — | `FatalServiceError`/`StoreError` classes, `CUSTOM_NS` prop namespace, staging-directory publish in `pipeline/assemble.py`, `record_attempt` upsert, `db.transaction` catching `BaseException` | Maintained |
+| D10 | §8.2 JEV transport | httpx-only Laya SystemOne client | OpenAiJevClient (chat completions + logprobs) as default; legacy client retained for SystemOne servers | Maintained |
