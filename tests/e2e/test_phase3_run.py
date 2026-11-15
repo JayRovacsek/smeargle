@@ -35,6 +35,7 @@ def _invoke(tmp_path, document, catalog, llm, jev, run_id):
             "--state-dir", str(tmp_path / "state"), "--output", str(tmp_path / "out"),
             "--yes", "--run-id", run_id,
             "--llm-base-url", llm.url, "--jev-base-url", jev.url,
+            "--jev-transport", "systemone",
             "run", "-i", str(document), "-c", str(catalog),
         ],
         capture_output=True, text=True, env=env, timeout=120,
