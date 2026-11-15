@@ -28,6 +28,7 @@ class JevSettings(BaseModel):
     api_key_env: Optional[str] = None
     timeout: float = 60.0
     retries: int = 3
+    transport: Literal["chat", "systemone"] = "chat"
     batch: bool = False
     batch_size: int = Field(default=64, ge=1, le=64)
     min_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)

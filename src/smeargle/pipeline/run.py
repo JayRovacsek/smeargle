@@ -9,8 +9,9 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional, Sequence
 
 import openai
 
-from smeargle.clients.http import build_client, load_bearer_token
+from smeargle.clients.http import build_client, ensure_v1_suffix, load_bearer_token
 from smeargle.clients.jev import LayaJevClient
+from smeargle.clients.jev_openai import OpenAiJevClient
 from smeargle.clients.llm import OpenAiCompatibleLLM
 from smeargle.clients.ports import CallMeta
 from smeargle.config import Settings
@@ -281,6 +282,22 @@ def _build_jev(settings: Settings, bus: EvidenceBus):
     if not settings.jev.base_url:
         raise ServiceError("jev base_url is not configured")
     token = load_bearer_token(auth_file=settings.jev.auth_file, api_key_env=settings.jev.api_key_env)
+    if settings.jev.transport == "chat":
+        client = openai.OpenAI(
+            base_url=ensure_v1_suffix(settings.jev.base_url),
+            api_key=token or "placeholder",
+            timeout=settings.jev.timeout,
+            max_retries=0,
+        )
+        llm = OpenAiCompatibleLLM(
+            client, model=settings.jev.model or "decider-0.8b", retries=settings.jev.retries,
+            temperature=0.0, structured_output=False, recorder=bus,
+        )
+        jev = OpenAiJevClient(
+            llm, model=settings.jev.model or "decider-0.8b",
+            min_confidence=settings.jev.min_confidence,
+        )
+        return client, jev
     http = build_client(
         base_url=settings.jev.base_url, timeout=settings.jev.timeout, token=token,
         max_connections=settings.execution.concurrency,

@@ -59,6 +59,7 @@ def _common(tmp_path):
     return [
         "--state-dir", str(tmp_path / "s"), "--output", str(tmp_path / "o"), "--yes",
         "--llm-base-url", "https://llm.example", "--jev-base-url", "https://jev.example",
+        "--jev-transport", "systemone",
     ]
 
 

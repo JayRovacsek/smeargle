@@ -65,6 +65,7 @@ def test_run_persists_and_status_reports_stages(tmp_path, capsys):
             "--state-dir", str(state), "--output", str(output), "--yes",
             "--llm-base-url", "https://llm.example",
             "--jev-base-url", "https://jev.example",
+            "--jev-transport", "systemone",
             "run", "-i", str(document), "-c", str(catalog),
         ]
     )

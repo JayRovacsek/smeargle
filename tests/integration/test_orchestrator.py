@@ -21,6 +21,7 @@ def _settings(tmp_path, **overrides):
     settings.llm.model = "test-model"
     settings.jev.base_url = "https://jev.example"
     settings.jev.model = "jev-model"
+    settings.jev.transport = "systemone"
     return settings
 
 
@@ -479,26 +480,31 @@ def test_jev_batching_issues_one_batch_call_for_verification_and_classification(
         return httpx.Response(200, json=_chat(json.dumps({"control_ids": ["c-1.1"]})))
 
     respx.post("https://llm.example/chat/completions").mock(side_effect=chat_router)
+    # The legacy server has no batch route: with batching enabled the client
+    # still falls back to one /v1/systemone call per state for verification and
+    # classification (plus the two extract-gate calls), never /v1/decide/batch.
     batch = respx.post("https://jev.example/v1/decide/batch").mock(
-        side_effect=[
-            httpx.Response(200, json={"results": [_answers(("yes", 0.9))]}),
-            httpx.Response(200, json={"results": [_answers(("subset-of", 0.85))]}),
-        ]
+        return_value=httpx.Response(200, json={"results": []})
     )
-    respx.post("https://jev.example/v1/systemone").mock(
+    systemone = respx.post("https://jev.example/v1/systemone").mock(
         side_effect=[
             httpx.Response(200, json=_answers(("yes", 0.9))),
             httpx.Response(200, json=_answers(("MUST", 0.9))),
+            httpx.Response(200, json=_answers(("yes", 0.9))),
+            httpx.Response(200, json=_answers(("subset-of", 0.85))),
         ]
     )
-    run_pipeline.run_pipeline(
+    result = run_pipeline.run_pipeline(
         state_dir=settings.state_dir, output=settings.output,
         input_paths=[document], catalog_paths=[catalog], settings=settings,
         clock=FrozenClock(datetime(2026, 1, 1, tzinfo=timezone.utc)),
         id_factory=UuidIdFactory(), run_id="run-batch",
     )
-    assert batch.call_count == 2
-    assert b'"states"' in batch.calls[0].request.content
+    assert batch.call_count == 0
+    assert systemone.call_count == 4
+    assert result.candidate_count == 1
+    with RunStore.open(settings.state_dir) as store:
+        assert store.counts("run-batch")["mappings"] == 1
 
 
 @respx.mock

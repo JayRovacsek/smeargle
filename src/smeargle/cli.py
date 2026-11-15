@@ -74,6 +74,9 @@ def root(
     jev_api_key_env: Optional[str] = typer.Option(None, "--jev-api-key-env"),
     jev_timeout: Optional[float] = typer.Option(None, "--jev-timeout"),
     jev_retries: Optional[int] = typer.Option(None, "--jev-retries"),
+    jev_transport: Optional[str] = typer.Option(
+        None, "--jev-transport", help="chat or systemone."
+    ),
     jev_batch: Optional[bool] = typer.Option(None, "--jev-batch/--no-jev-batch"),
     jev_batch_size: Optional[int] = typer.Option(None, "--jev-batch-size"),
     jev_min_confidence: Optional[float] = typer.Option(None, "--jev-min-confidence"),
@@ -107,6 +110,9 @@ def root(
 
     if catalog_format is not None and catalog_format not in {"auto", "oscal"}:
         raise UsageError("--catalog-format must be 'auto' or 'oscal'")
+
+    if jev_transport is not None and jev_transport not in {"chat", "systemone"}:
+        raise UsageError("--jev-transport must be 'chat' or 'systemone'")
 
     overrides: dict[str, Any] = {}
     if output is not None:
@@ -147,6 +153,7 @@ def root(
         for key, value in {
             "base_url": jev_base_url, "model": jev_model, "auth_file": jev_auth_file,
             "api_key_env": jev_api_key_env, "timeout": jev_timeout, "retries": jev_retries,
+            "transport": jev_transport,
             "batch": jev_batch, "batch_size": jev_batch_size,
             "min_confidence": jev_min_confidence,
         }.items()

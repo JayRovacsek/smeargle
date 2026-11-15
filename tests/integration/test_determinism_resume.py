@@ -26,6 +26,7 @@ def _settings(tmp_path):
     settings.llm.model = "test-model"
     settings.jev.base_url = "https://jev.example"
     settings.jev.model = "jev-model"
+    settings.jev.transport = "systemone"
     return settings
 
 

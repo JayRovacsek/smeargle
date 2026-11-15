@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from smeargle.config import Settings
+from smeargle.config import JevSettings, Settings
 
 
 def test_defaults():
@@ -9,6 +9,16 @@ def test_defaults():
     assert s.state_dir == Path(".smeargle")
     assert s.llm.temperature == 0.0
     assert s.execution.log_format == "text"
+
+
+def test_jev_transport_defaults_to_chat():
+    assert JevSettings().transport == "chat"
+
+
+def test_jev_transport_env_override(monkeypatch):
+    monkeypatch.setenv("SMEARGLE_JEV__TRANSPORT", "systemone")
+    s = Settings.load()
+    assert s.jev.transport == "systemone"
 
 
 def test_file_overrides_defaults(tmp_path):
