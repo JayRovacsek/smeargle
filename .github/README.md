@@ -5,8 +5,7 @@
 **The painter that reads the world and paints it onto the canvas of compliance.**
 
 > **AI-assisted work.** This package was written explicitly with AI assistance,
-> by halogen-qwen3.8-flash-next via OpenCode, and every commit carries an
-> `Assisted-by` trailer.
+> and every commit carries an `Assisted-by` trailer.
 
 [![Python][python-badge]][python-link]
 [![Nix Flakes][nix-badge]][nix-link]
@@ -29,7 +28,7 @@
 > invent what it paints; it interprets it. **Habitat:** wherever unstructured
 > documentation collects.
 
-This `smeargle` is that artist for security and compliance. The raw world it
+Smeargle is the artist for security and compliance. The raw world it
 studies is your documentation: policies, standards and contracts, in PDFs,
 DOCX files, JSON and Markdown of unknown and arbitrary structure. Within that
 world it finds the normative vision, every `MUST`, `SHALL`, `SHOULD` and
