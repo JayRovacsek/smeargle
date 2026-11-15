@@ -177,6 +177,14 @@ def test_batch_loops_states():
 
 
 @respx.mock
+def test_missing_choices_raise_service_error():
+    respx.post(URL).mock(return_value=httpx.Response(200, json={"object": "chat.completion"}))
+    question = JevQuestion(kind="noul", question="Is a requirement?")
+    with pytest.raises(ServiceError):
+        _client().systemone("state", [question])
+
+
+@respx.mock
 def test_exhausted_retries_raise_service_error():
     respx.post(URL).mock(return_value=httpx.Response(429, json={"error": "slow down"}))
     question = JevQuestion(kind="noul", question="Is a requirement?")

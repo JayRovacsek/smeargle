@@ -75,7 +75,10 @@ class OpenAiJevClient:
         return self._to_answer(question, options, response)
 
     def _to_answer(self, question: JevQuestion, options: list[str], response: Any) -> JevAnswer:
-        choice = response._response.choices[0]
+        try:
+            choice = response._response.choices[0]
+        except (AttributeError, IndexError, TypeError) as exc:
+            raise ServiceError(f"JEV decision response missing choices: {exc}") from exc
         option = self._chosen(choice, options)
         probabilities = self._probabilities(choice, options)
         confidence = probabilities.get(option, max(probabilities.values(), default=0.0))
