@@ -21,33 +21,15 @@
 
 </div>
 
-## The artist
-
-> **Category:** Painter. **Behaviour:** wanders the world painting what it
-> sees, marking its territory with art drawn from its own tail. It does not
-> invent what it paints; it interprets it. **Habitat:** wherever unstructured
-> documentation collects.
-
-Smeargle is the artist for security and compliance. The raw world it
-studies is your documentation: policies, standards and contracts, in PDFs,
-DOCX files, JSON and Markdown of unknown and arbitrary structure. Within that
-world it finds the normative vision, every `MUST`, `SHALL`, `SHOULD` and
-`REQUIRED` statement, the RFC 2119 obligations that actually bind you. Then it
-maps every requirement onto the controls of one or more
-[OSCAL](https://pages.nist.gov/OSCAL/) control catalogs, choosing where each
-stroke belongs, and paints the finished work: a coherent, validated set of
-OSCAL 1.2.3 artifacts. Every brushstroke is recorded as evidence, every canvas
-can be resumed mid-painting, and the gallery accepts nothing that fails
-validation.
-
 ## What smeargle does
 
 `smeargle` is a Python CLI that:
 
-1. Ingests an arbitrary number of source documents (PDF, DOCX, JSON,
-   text/Markdown) of unknown structure, plus one or more target control
-   catalogs (standard OSCAL, or non-OSCAL "container" shapes which are
-   normalised behind the scenes).
+1. Ingests an arbitrary number of source documents (policies, standards,
+   contracts, in PDF, DOCX, JSON or text/Markdown) of unknown structure, plus
+   one or more target control catalogs (standard
+   [OSCAL](https://pages.nist.gov/OSCAL/), or non-OSCAL "container" shapes
+   which are normalised behind the scenes).
 2. Extracts RFC 2119 normative requirements from the documents. Each candidate
    is proposed by an LLM, then gated by a JEV-style System 1 decision engine
    for authenticity and keyword classification.
