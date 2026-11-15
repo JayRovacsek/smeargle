@@ -30,7 +30,8 @@
    one or more target control catalogs (standard
    [OSCAL](https://pages.nist.gov/OSCAL/), or non-OSCAL "container" shapes
    which are normalised behind the scenes).
-2. Extracts RFC 2119 normative requirements from the documents. Each candidate
+2. Extracts [RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119)
+   normative requirements from the documents. Each candidate
    is proposed by an LLM, then gated by a System 1 classifier model
    for authenticity and keyword classification.
 3. Maps every accepted requirement to candidate controls (LLM retrieval),
@@ -41,7 +42,9 @@
    human/audit-facing rationale and full raw call evidence.
 
 It never runs or hosts a model. It speaks HTTP to whatever endpoints you point
-it at: a local llama.cpp server, OpenRouter, or any OpenAI-compatible LLM for
+it at: a local [llama.cpp](https://github.com/ggml-org/llama.cpp) server,
+[OpenRouter](https://openrouter.ai), or any
+[OpenAI](https://platform.openai.com/docs/api-reference)-compatible LLM for
 proposal/retrieval, and a separate classifier model endpoint for the gated
 decisions.
 
@@ -147,7 +150,7 @@ them, not the generative model.
    reject, which gives a principled, auditable gate. A generative LLM emits
    prose, and thresholding its text is guesswork.
 3. A classifier cannot hallucinate a mapping. A decision engine is
-   encoder-based (ModernBERT-style): it selects among the
+   encoder-based ([ModernBERT](https://huggingface.co/microsoft/ModernBERT-base)-style): it selects among the
    options it is given and cannot invent a requirement, a control id, or an
    `href` that was not in its inputs. The generative LLM can, which is why its
    output is never trusted as a verdict.
@@ -183,7 +186,7 @@ between the two models is a safety measure as well as an efficiency one.
   before the call and annotated with the response after; interrupted work is
   re-issued on resume. Deterministic resume issues zero new external calls for
   completed work.
-- Deterministic assembly: frozen clock, UUIDv5 identifiers, content-sorted
+- Deterministic assembly: frozen clock, [UUIDv5](https://datatracker.ietf.org/doc/html/rfc4122) identifiers, content-sorted
   emission. Re-assembling the same stored ledger yields byte-identical
   artifacts (proven by test).
 - Retry with exponential backoff, jitter and `Retry-After` respect; retries
@@ -382,7 +385,7 @@ nix develop -c mypy src
 nix build .#smeargle             # build the CLI
 ```
 
-The layout is a PEP 621 `src/` project (`src/smeargle/`) with modules for
+The layout is a [PEP 621](https://peps.python.org/pep-0621/) `src/` project (`src/smeargle/`) with modules for
 `domain`, `loaders`, `catalog_adapters`, `clients`, `store`, `pipeline`,
 `oscal_build`, `prompts`, `config`, `errors` and `observability`, plus a
 `tests/` tree of unit, integration and e2e layers with shared fakes and vendored
