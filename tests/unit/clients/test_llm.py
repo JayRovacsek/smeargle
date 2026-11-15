@@ -1,4 +1,6 @@
 import json
+import time
+from email.utils import formatdate
 
 import httpx
 import openai
@@ -153,3 +155,81 @@ def test_plain_prompt_also_sends_a_leading_system_message():
     body = json.loads(route.calls[2].request.content)
     assert body["messages"][0]["role"] == "system"
     assert body["messages"][1] == {"role": "user", "content": "hi"}
+
+
+@respx.mock
+def test_rate_limit_honours_retry_after_seconds_header():
+    respx.post(URL).mock(
+        side_effect=[
+            httpx.Response(429, headers={"retry-after": "30"}, json={"error": "slow down"}),
+            httpx.Response(200, json=_chat('{"requirements": []}')),
+        ]
+    )
+    sleeps = []
+    _client(retries=2, structured_output=False, sleep=sleeps.append).complete_json(
+        wire.ExtractionResponseModel, [{"role": "user", "content": "hi"}]
+    )
+    assert sleeps == [30.0]
+
+
+@respx.mock
+def test_rate_limit_prefers_retry_after_ms_over_retry_after():
+    respx.post(URL).mock(
+        side_effect=[
+            httpx.Response(
+                429,
+                headers={"retry-after-ms": "1500", "retry-after": "30"},
+                json={"error": "slow down"},
+            ),
+            httpx.Response(200, json=_chat('{"requirements": []}')),
+        ]
+    )
+    sleeps = []
+    _client(retries=2, structured_output=False, sleep=sleeps.append).complete_json(
+        wire.ExtractionResponseModel, [{"role": "user", "content": "hi"}]
+    )
+    assert sleeps == [1.5]
+
+
+@respx.mock
+def test_retry_after_value_is_capped_at_max_backoff():
+    respx.post(URL).mock(
+        side_effect=[
+            httpx.Response(429, headers={"retry-after": "120"}, json={"error": "slow down"}),
+            httpx.Response(200, json=_chat('{"requirements": []}')),
+        ]
+    )
+    sleeps = []
+    _client(retries=2, structured_output=False, sleep=sleeps.append).complete_json(
+        wire.ExtractionResponseModel, [{"role": "user", "content": "hi"}]
+    )
+    assert sleeps == [60.0]
+
+
+@respx.mock
+def test_exponential_backoff_sequence_capped_at_60s():
+    responses = [httpx.Response(503) for _ in range(9)]
+    responses[-1] = httpx.Response(200, json=_chat('{"requirements": []}'))
+    respx.post(URL).mock(side_effect=responses)
+    sleeps = []
+    _client(retries=8, structured_output=False, sleep=sleeps.append).complete_json(
+        wire.ExtractionResponseModel, [{"role": "user", "content": "hi"}]
+    )
+    # 0.5, 1, 2, 4, 8, 16, 32, 64 -> final delay capped at 60 (rng=None, no jitter)
+    assert sleeps == [0.5, 1, 2, 4, 8, 16, 32, 60]
+
+
+@respx.mock
+def test_retry_after_http_date_header_is_parsed():
+    when = formatdate(time.time() + 45, usegmt=True)
+    respx.post(URL).mock(
+        side_effect=[
+            httpx.Response(503, headers={"retry-after": when}, json={"error": "unavailable"}),
+            httpx.Response(200, json=_chat('{"requirements": []}')),
+        ]
+    )
+    sleeps = []
+    _client(retries=2, structured_output=False, sleep=sleeps.append).complete_json(
+        wire.ExtractionResponseModel, [{"role": "user", "content": "hi"}]
+    )
+    assert 40.0 <= sleeps[0] <= 45.0

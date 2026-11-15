@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Mapping, Optional, Sequence, TypeVar
 
 import httpx
@@ -20,6 +22,7 @@ _logger = logging.getLogger(__name__)
 _MODES = ("json_schema", "json_object", "plain")
 _MAX_REPAIRS = 2
 _RETRYABLE_STATUSES = frozenset({408, 429, *range(500, 600)})
+_MAX_BACKOFF_SECONDS = 60.0
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -81,6 +84,42 @@ def extract_first_json_object(text: str) -> str:
             if depth == 0:
                 return text[start : index + 1]
     raise ValueError("unbalanced JSON object in model output")
+
+
+def _retry_after_seconds(exc: openai.APIStatusError) -> Optional[float]:
+    """Extract a retry delay from an SDK status error's response headers.
+
+    Mirrors the openai SDK's own header precedence: ``retry-after-ms``
+    (milliseconds), then ``retry-after`` (seconds, allowing nonstandard
+    floats), then ``retry-after`` as an HTTP-date. Returns ``None`` when no
+    usable header is present.
+    """
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    ms = headers.get("retry-after-ms")
+    if ms is not None:
+        try:
+            return max(0.0, float(ms) / 1000.0)
+        except ValueError:
+            pass
+    value = headers.get("retry-after")
+    if value is None:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
 
 
 class OpenAiCompatibleLLM:
@@ -230,8 +269,14 @@ class OpenAiCompatibleLLM:
                     prompt_hash=meta.prompt_hash,
                 )
 
-        def backoff(attempt_no: int) -> None:
-            delay = 0.5 * (2 ** (attempt_no - 1))
+        def backoff(attempt_no: int, exc: Optional[openai.APIStatusError] = None) -> None:
+            retry_after = _retry_after_seconds(exc) if exc is not None else None
+            if retry_after is not None:
+                delay = min(_MAX_BACKOFF_SECONDS, retry_after)
+            else:
+                delay = min(_MAX_BACKOFF_SECONDS, 0.5 * (2 ** (attempt_no - 1)))
+                if self._rng is not None:
+                    delay = self._rng.uniform(0.0, delay)
             _logger.warning(
                 "llm retry %s %s attempt %s",
                 call_type, item_ref, attempt_no + 1,
@@ -240,7 +285,7 @@ class OpenAiCompatibleLLM:
                     "model": self._model, "attempt_no": attempt_no + 1,
                 }},
             )
-            self._sleep(self._rng.uniform(0.0, min(8.0, delay)) if self._rng else delay)
+            self._sleep(delay)
 
         for attempt_no in range(1, self._retries + 2):
             try:
@@ -248,7 +293,7 @@ class OpenAiCompatibleLLM:
             except openai.RateLimitError as exc:
                 on_attempt(429, "RateLimitError", str(exc))
                 if attempt_no <= self._retries:
-                    backoff(attempt_no)
+                    backoff(attempt_no, exc)
                     continue
                 _logger.error(
                     "llm %s %s failed: rate limited",
@@ -268,7 +313,7 @@ class OpenAiCompatibleLLM:
                         f"LLM authentication rejected: HTTP {exc.status_code}"
                     ) from exc
                 if exc.status_code in _RETRYABLE_STATUSES and attempt_no <= self._retries:
-                    backoff(attempt_no)
+                    backoff(attempt_no, exc)
                     continue
                 _logger.error(
                     "llm %s %s failed: HTTP %s",
