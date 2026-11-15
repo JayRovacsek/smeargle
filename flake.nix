@@ -1,9 +1,17 @@
 {
-  description = "smeargle: map RFC 2119 requirements to OSCAL control catalogs";
+  description = "smeargle: map RFC 2119 requirements to OSCAL control catalogues";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    git-hooks = {
+      url = "github:cachix/git-hooks.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    devshell = {
+      url = "github:numtide/devshell";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -11,6 +19,8 @@
       self,
       flake-utils,
       nixpkgs,
+      git-hooks,
+      devshell,
       ...
     }:
     let
@@ -26,7 +36,10 @@
         let
           pkgs = import nixpkgs {
             inherit system;
-            overlays = [ overlay ];
+            overlays = [
+              overlay
+              devshell.overlays.default
+            ];
           };
           py = pkgs.python3Packages;
           smeargle = py.buildPythonApplication {
@@ -36,7 +49,7 @@
             src = pkgs.lib.cleanSourceWith {
               src = ./.;
               filter =
-                path: type:
+                path: _type:
                 let
                   root = toString ./.;
                   rel = pkgs.lib.removePrefix (root + "/") (toString path);
@@ -67,8 +80,26 @@
             ];
             pythonImportsCheck = [ "smeargle" ];
             meta = {
-              description = "Map RFC 2119 requirements to OSCAL control catalogs";
+              description = "Map RFC 2119 requirements to OSCAL control catalogues";
               mainProgram = "smeargle";
+            };
+          };
+          pre-commit-check = git-hooks.lib.${system}.run {
+            src = ./.;
+            hooks = {
+              deadnix = {
+                enable = true;
+                settings.noUnderscore = true;
+              };
+              nixfmt.enable = true;
+              prettier.enable = true;
+              ruff.enable = true;
+              statix.enable = true;
+              trufflehog.enable = true;
+              typos = {
+                enable = true;
+                settings.locale = "en-au";
+              };
             };
           };
         in
@@ -78,7 +109,8 @@
             default = smeargle;
           };
 
-          devShells.default = pkgs.mkShell {
+          devShells.default = pkgs.devshell.mkShell {
+            name = "smeargle";
             packages = [
               (pkgs.python3.withPackages (ps: [
                 ps.typer
@@ -95,15 +127,30 @@
                 ps.openai
                 ps.rich
               ]))
-              py.ruff
               py.mypy
+              # hook tools, available directly in the shell
+              pkgs.deadnix
+              pkgs.nixfmt
+              pkgs.prettier
+              pkgs.ruff
+              pkgs.statix
+              pkgs.trufflehog
+              pkgs.typos
             ];
-            shellHook = ''
-              export PYTHONPATH="$PWD/src''${PYTHONPATH:+:$PYTHONPATH}"
-            '';
+            env = [
+              {
+                name = "PYTHONPATH";
+                eval = "$PRJ_ROOT/src";
+              }
+            ];
+            # wire the git hooks into the shell so commits run the checks
+            devshell.startup.pre-commit.text = pre-commit-check.shellHook;
           };
 
-          checks.default = self.packages.${system}.smeargle;
+          checks = {
+            pre-commit = pre-commit-check;
+            default = self.packages.${system}.smeargle;
+          };
 
           apps.default = {
             type = "app";
