@@ -31,10 +31,10 @@
    [OSCAL](https://pages.nist.gov/OSCAL/), or non-OSCAL "container" shapes
    which are normalised behind the scenes).
 2. Extracts RFC 2119 normative requirements from the documents. Each candidate
-   is proposed by an LLM, then gated by a System 1 decision model
+   is proposed by an LLM, then gated by a System 1 classifier model
    for authenticity and keyword classification.
 3. Maps every accepted requirement to candidate controls (LLM retrieval),
-   verifies each candidate pair (decision model `noul` probability gate) and classifies
+   verifies each candidate pair (classifier model `noul` probability gate) and classifies
    the confirmed pairs with an OSCAL relationship (`equivalent-to`, `equal-to`,
    `subset-of`, `superset-of`, `intersects-with`).
 4. Emits a complete, schema-validated OSCAL 1.2.3 output set, plus a
@@ -42,7 +42,7 @@
 
 It never runs or hosts a model. It speaks HTTP to whatever endpoints you point
 it at: a local llama.cpp server, OpenRouter, or any OpenAI-compatible LLM for
-proposal/retrieval, and a separate decision model endpoint for the gated
+proposal/retrieval, and a separate classifier model endpoint for the gated
 decisions.
 
 ## The canvas
@@ -52,7 +52,7 @@ decisions.
 | `-i` documents: PDF, DOCX, JSON, text/Markdown | `requirements-catalog.json`: OSCAL catalog of extracted requirements, grouped per source document |
 | `-c` catalogs: OSCAL or non-OSCAL container JSON | `profile.json`: OSCAL tailoring profile importing every catalog, with per-requirement mapping props |
 | LLM endpoint (OpenAI-compatible) | `mapping-collection.json`: OSCAL control mappings with confidence percentages |
-| Decision model endpoint (chat decisions, or legacy SystemOne) | `rationale.json`: the audit record of gates, confidences, unmapped/rejected reasons |
+| Classifier model endpoint (chat decisions, or legacy SystemOne) | `rationale.json`: the audit record of gates, confidences, unmapped/rejected reasons |
 | | `catalogs/<source-stem>.json`: normalised OSCAL catalogs (one per input) |
 | | `evidence/`: every raw redacted LLM/decision-model request/response |
 
@@ -115,7 +115,7 @@ over-generate. It runs with `temperature=0`, structured output, a bounded
 validate-and-repair loop, and prompt-injection fencing around untrusted
 document content. Its output is candidates, never verdicts.
 
-#### The decision model: judgement and precision (System 1 / classifier)
+#### The classifier model: judgement and precision (System 1)
 
 **Intent.** Take the LLM's wide net of proposals and decide. Every externally
 visible claim the tool makes is a small, bounded question with a defined answer
@@ -124,7 +124,7 @@ control?"*, *"Which RFC 2119 keyword is it?"*, *"Which OSCAL relationship
 holds?"*. These are classification problems, so a classification model answers
 them, not the generative model.
 
-**What it does.** The decision model endpoint answers typed questions over HTTP:
+**What it does.** The classifier model endpoint answers typed questions over HTTP:
 
 - `noul`: a binary yes/no probability. Used as the authenticity gate at
   extraction (against `--extract-gate-threshold`) and the relatedness gate at
@@ -156,7 +156,7 @@ them, not the generative model.
    parsed after the fact. A compliance mapping must be reproducible and
    defensible.
 5. Speed and cost at volume. The decision step runs over every candidate pair;
-   a small, fast decision model is far cheaper and lower-latency than a large
+   a small, fast classifier model is far cheaper and lower-latency than a large
    generative model across that many calls.
 6. A closed decision space. The classifier is only ever offered the valid
    options: the nine normative RFC 2119 keywords and the five positive OSCAL
@@ -217,7 +217,7 @@ The flake builds for `x86_64-linux` and `aarch64-linux` and provides
 ```
 
 - `--llm-base-url` accepts any OpenAI-compatible `/v1/chat/completions` endpoint.
-- `--jev-base-url` accepts a SystemOne-style decision model server; `--jev-model`
+- `--jev-base-url` accepts a SystemOne-style classifier model server; `--jev-model`
   names the checkpoint that server exposes (e.g. an `english` alias).
 - Secrets come from `--*-auth-file` or `--*-api-key-env` only, never CLI
   tokens, and are redacted before persistence.
@@ -237,7 +237,7 @@ Key options: repeatable `-i/--input` and `-c/--catalog`, `--catalog-format
 {auto,oscal}`, `--config` (TOML/YAML), `--log-format {text,json}`, tuning knobs
 (`--extract-gate-threshold` 0.50, `--mapped-threshold` 0.50, `--category-high`
 0.80, `--category-medium` 0.50, `--nomination-cap`, `--concurrency`,
-`--jev-transport {chat,systemone}`, decision model batching via
+`--jev-transport {chat,systemone}`, classifier model batching via
 `--jev-batch/--no-jev-batch`, `--jev-batch-size`,
 `--jev-min-confidence`). Configuration precedence: CLI flags > environment
 (`SMEARGLE_*`) > config file > defaults.
@@ -282,7 +282,7 @@ smeargle --output out/ validate -c NIST_SP-800-53_rev5_catalog.json
 smeargle --state-dir ./.smeargle --output out/ status
 ```
 
-**Decision model transport selection**: `chat` (the default) speaks the chat-completions
+**Classifier model transport selection**: `chat` (the default) speaks the chat-completions
 decisions wire; `systemone` selects the legacy protocol.
 
 ```bash
@@ -349,7 +349,7 @@ Engineering outcomes:
   reproduces the exact artifacts.
 - Resume correctness proven by test: killing a run between stages and resuming
   issues zero new external calls for completed work.
-- Wire-contract hardening: the decision model client was corrected against a real
+- Wire-contract hardening: the classifier model client was corrected against a real
   SystemOne server (keyed questions and corrected wire shape), and the LLM
   client's schema-instruction ordering was fixed, after live smoke runs
   surfaced the mismatches.
