@@ -338,6 +338,13 @@ error back). `temperature=0`; all sampling parameters are recorded. Document
 content is delimited and explicitly declared untrusted data (prompt-injection
 defence).
 
+> **Amended 2026-11-15 (intentional deviation):** the transport is the official
+> `openai` Python SDK rather than a hand-rolled `httpx.Client`, but it is
+> constructed with `max_retries=0` so the application-level loop below still
+> observes and records every attempt. The loop honours `Retry-After`
+> (`retry-after-ms` → `retry-after` seconds → HTTP-date, matching the SDK's own
+> precedence) and caps exponential backoff at 60 seconds.
+
 ### 8.2 JEV client
 
 `POST {jev}/v1/systemone` with `state` + `questions`, or
@@ -795,3 +802,21 @@ and mapped to exit codes in the CLI. Structured logging
 | R3 | Config-drift resume is gated by a separate `config_hash` with an explicit prompt. |
 | R4 | No asyncio: sync `httpx` in a `ThreadPoolExecutor` over a single-writer WAL store. |
 | R5 | Colliding control ids across catalogs fail fast. |
+
+## 18. Deviation register (amended 2026-11-15)
+
+Each entry records the original intent, the current implementation, and the
+decision to maintain the deviation. These were reviewed and confirmed
+intentional; the register exists so the spec and code agree on the delta.
+
+| # | Area | Original intent | Current implementation | Status |
+|---|---|---|---|---|
+| D1 | §8.1 LLM transport | Hand-rolled `httpx.Client` delegating to `retry.request_with_retry` | Official `openai` SDK (`max_retries=0`) with an app-level retry wrapper; Retry-After honoured, backoff capped at 60s | Maintained (see §8.1 amendment, plan 2026-11-15) |
+| D2 | §8.2 JEV batch endpoint | `POST {jev}/v1/systemone/batch` with per-`(state, questions)` items | `POST {jev}/v1/decide/batch` with a shared `questions` dict applied to all `states`; DTOs use the keyed `q0..qN` discriminated-union shape | Maintained — matches the reference Laya server's actual batch route |
+| D3 | §8.2 noul probability | The returned probability **is** the response's `answer_confidence` | Prefers the `noul` field; falls back to `confidence`, then `0.0`; the `yes`/`no` label is synthesised at the 0.5 midpoint | Maintained |
+| D4 | §6/§12 flag naming | `--llm-endpoint` / `--jev-endpoint` (config `endpoint`) | `--llm-base-url` / `--jev-base-url` (config `base_url`), consistently across CLI, config, and tests | Maintained |
+| D5 | §6/§15 redaction | Secrets are redacted before any persistence, no opt-out | `--redact/--no-redact` toggle (default on) plus `Execution.redact` config field | Maintained |
+| D6 | §12 JEV options | `--jev-max-len` / `--jev-head-max-len` CLI flags | Config fields `jev.max_len` / `jev.head_max_len` exist; no CLI flags expose them | Maintained (documented gap) |
+| D7 | §11.6 facade validation | `instance.validate()` (full metaschema validation) | `instance.is_valid` (lighter parse/required-fields check) | Intentional — looser validation of incoming data is desired |
+| D8 | §4/§5 layout extras | No `console.py`; `JevResult` in `clients/ports.py`; no `Ledger` in `domain/` | `console.py` (Rich console), `domain/jev.py` (Jev* values), `Ledger` in `domain/run.py` | Maintained |
+| D9 | Misc hardening | — | `FatalServiceError`/`StoreError` classes, `CUSTOM_NS` prop namespace, staging-directory publish in `pipeline/assemble.py`, `record_attempt` upsert, `db.transaction` catching `BaseException` | Maintained |
