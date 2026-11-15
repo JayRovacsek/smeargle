@@ -6,11 +6,16 @@ import math
 import random
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from typing import TYPE_CHECKING, Callable, Optional
 
 import httpx
 
 from smeargle.errors import FatalServiceError, ServiceError
+
+if TYPE_CHECKING:
+    import openai
 
 RETRY_STATUSES = frozenset({408, 429, *range(500, 600)})
 RETRY_EXCEPTIONS = (
@@ -20,6 +25,44 @@ RETRY_EXCEPTIONS = (
     httpx.WriteTimeout,
     httpx.PoolTimeout,
 )
+MAX_BACKOFF_SECONDS = 60.0
+RETRYABLE_STATUSES = RETRY_STATUSES
+
+
+def retry_after_seconds(exc: "openai.APIStatusError") -> Optional[float]:
+    """Extract a retry delay from an SDK status error's response headers.
+
+    Mirrors the openai SDK's own header precedence: ``retry-after-ms``
+    (milliseconds), then ``retry-after`` (seconds, allowing nonstandard
+    floats), then ``retry-after`` as an HTTP-date. Returns ``None`` when no
+    usable header is present.
+    """
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    ms = headers.get("retry-after-ms")
+    if ms is not None:
+        try:
+            return max(0.0, float(ms) / 1000.0)
+        except ValueError:
+            pass
+    value = headers.get("retry-after")
+    if value is None:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
 
 
 @dataclass(frozen=True, slots=True)

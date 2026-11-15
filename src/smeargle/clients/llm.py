@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from typing import Any, Mapping, Optional, Sequence, TypeVar
 
 import httpx
@@ -15,14 +13,13 @@ from pydantic import BaseModel, ValidationError
 
 from smeargle.clients.dto import loads_strict
 from smeargle.clients.ports import CallMeta, CallRecorder
+from smeargle.clients.retry import MAX_BACKOFF_SECONDS, RETRYABLE_STATUSES, retry_after_seconds
 from smeargle.errors import FatalServiceError, ServiceError
 
 _logger = logging.getLogger(__name__)
 
 _MODES = ("json_schema", "json_object", "plain")
 _MAX_REPAIRS = 2
-_RETRYABLE_STATUSES = frozenset({408, 429, *range(500, 600)})
-_MAX_BACKOFF_SECONDS = 60.0
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -84,42 +81,6 @@ def extract_first_json_object(text: str) -> str:
             if depth == 0:
                 return text[start : index + 1]
     raise ValueError("unbalanced JSON object in model output")
-
-
-def _retry_after_seconds(exc: openai.APIStatusError) -> Optional[float]:
-    """Extract a retry delay from an SDK status error's response headers.
-
-    Mirrors the openai SDK's own header precedence: ``retry-after-ms``
-    (milliseconds), then ``retry-after`` (seconds, allowing nonstandard
-    floats), then ``retry-after`` as an HTTP-date. Returns ``None`` when no
-    usable header is present.
-    """
-    response = getattr(exc, "response", None)
-    headers = getattr(response, "headers", None)
-    if headers is None:
-        return None
-    ms = headers.get("retry-after-ms")
-    if ms is not None:
-        try:
-            return max(0.0, float(ms) / 1000.0)
-        except ValueError:
-            pass
-    value = headers.get("retry-after")
-    if value is None:
-        return None
-    try:
-        return max(0.0, float(value))
-    except ValueError:
-        pass
-    try:
-        when = parsedate_to_datetime(value)
-    except (TypeError, ValueError):
-        return None
-    if when is None:
-        return None
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
 
 
 class OpenAiCompatibleLLM:
@@ -234,6 +195,14 @@ class OpenAiCompatibleLLM:
             ] + list(messages)
         return body
 
+    def raw_completion(self, body: dict[str, Any], meta: Optional[CallMeta]) -> "_SdkResponse":
+        """Issue a chat-completions request with the shared retry/recording loop.
+
+        Used by :class:`smeargle.clients.jev_openai.OpenAiJevClient` so JEV
+        decisions share the exact retry, Retry-After, and evidence semantics.
+        """
+        return self._post(body, meta)
+
     def _post(self, body: dict[str, Any], meta: Optional[CallMeta]) -> _SdkResponse:
         stage = meta.stage if meta is not None else "llm"
         item_ref = meta.item_ref if meta is not None else "-"
@@ -270,11 +239,11 @@ class OpenAiCompatibleLLM:
                 )
 
         def backoff(attempt_no: int, exc: Optional[openai.APIStatusError] = None) -> None:
-            retry_after = _retry_after_seconds(exc) if exc is not None else None
+            retry_after = retry_after_seconds(exc) if exc is not None else None
             if retry_after is not None:
-                delay = min(_MAX_BACKOFF_SECONDS, retry_after)
+                delay = min(MAX_BACKOFF_SECONDS, retry_after)
             else:
-                delay = min(_MAX_BACKOFF_SECONDS, 0.5 * (2 ** (attempt_no - 1)))
+                delay = min(MAX_BACKOFF_SECONDS, 0.5 * (2 ** (attempt_no - 1)))
                 if self._rng is not None:
                     delay = self._rng.uniform(0.0, delay)
             _logger.warning(
@@ -312,7 +281,7 @@ class OpenAiCompatibleLLM:
                     raise FatalServiceError(
                         f"LLM authentication rejected: HTTP {exc.status_code}"
                     ) from exc
-                if exc.status_code in _RETRYABLE_STATUSES and attempt_no <= self._retries:
+                if exc.status_code in RETRYABLE_STATUSES and attempt_no <= self._retries:
                     backoff(attempt_no, exc)
                     continue
                 _logger.error(

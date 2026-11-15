@@ -1,8 +1,24 @@
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
+from types import SimpleNamespace
+
 import httpx
+import openai
 import pytest
 
-from smeargle.clients.retry import Attempt, RetryPolicy, request_with_retry
+from smeargle.clients.retry import (
+    Attempt,
+    RetryPolicy,
+    request_with_retry,
+    retry_after_seconds,
+)
 from smeargle.errors import ServiceError
+
+
+def _status_error(headers: dict[str, str], status_code: int = 429) -> openai.APIStatusError:
+    request = httpx.Request("POST", "http://test/v1/chat/completions")
+    response = httpx.Response(status_code, headers=headers, request=request)
+    return openai.APIStatusError("rate limited", response=response, body=None)
 
 
 class RecordingPolicy(RetryPolicy):
@@ -87,3 +103,27 @@ def test_non_idempotent_call_is_not_retried():
             send, policy=RecordingPolicy(retries=3), idempotent=False, on_attempt=lambda _a: None
         )
     assert calls == 1
+
+
+def test_retry_after_seconds_parses_seconds_header():
+    assert retry_after_seconds(_status_error({"retry-after": "30"})) == 30.0
+
+
+def test_retry_after_seconds_prefers_ms_over_seconds():
+    headers = {"retry-after-ms": "1500", "retry-after": "30"}
+    assert retry_after_seconds(_status_error(headers)) == 1.5
+
+
+def test_retry_after_seconds_parses_http_date_header():
+    when = datetime.now(timezone.utc) + timedelta(seconds=120)
+    value = retry_after_seconds(_status_error({"retry-after": format_datetime(when)}))
+    assert value is not None
+    assert 115 <= value <= 121
+
+
+def test_retry_after_seconds_missing_response_returns_none():
+    assert retry_after_seconds(SimpleNamespace()) is None
+
+
+def test_retry_after_seconds_garbage_value_returns_none():
+    assert retry_after_seconds(_status_error({"retry-after": "not-a-number-or-date"})) is None
